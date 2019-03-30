@@ -149,7 +149,7 @@ char *sbSearchChar(const StringBuffer *const sb, char c);
     (sb)->len   = 0;    \
   }
 
-int          getJSONValue(const char *message, const char *fieldName, char *value, size_t len);
+bool         getJSONValue(const char *message, const char *fieldName, char *value, size_t len);
 void         getISO11783BitsFromCanId(unsigned int id, unsigned int *prio, unsigned int *pgn, unsigned int *src, unsigned int *dst);
 unsigned int getCanIdFromISO11783Bits(unsigned int prio, unsigned int pgn, unsigned int src, unsigned int dst);
 
@@ -252,10 +252,10 @@ bool parseConst(const char **msg, const char *str);
  * themselves or via proprietary non-PGN serial messages.
  * These need unique fake PGNs.
  */
-#define CANBOAT_PGN_START   0x40000
-#define CANBOAT_PGN_END     0x401FF
-#define ACTISENSE_BEM       0x40000 /* Actisense specific fake PGNs */
-#define IKONVERT_BEM        0x40100  /* iKonvert specific fake PGNs */
+#define CANBOAT_PGN_START 0x40000
+#define CANBOAT_PGN_END 0x401FF
+#define ACTISENSE_BEM 0x40000 /* Actisense specific fake PGNs */
+#define IKONVERT_BEM 0x40100  /* iKonvert specific fake PGNs */
 
 #define CANBOAT_COMMON
 #endif

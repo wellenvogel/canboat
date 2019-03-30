@@ -201,37 +201,33 @@ Field Number:
 */
 static void nmea0183VesselHeading(StringBuffer *msg183, int src, const char *msg)
 {
-  char headingString[30];
-  char deviationString[30];
-  char variationString[30];
-  char referenceString[30];
+  double heading;
+  double deviation;
+  double variation;
+  char   referenceString[30];
 
-  if (getJSONValue(msg, "Heading", headingString, sizeof(headingString))
-      && getJSONValue(msg, "Reference", referenceString, sizeof(referenceString)))
+  if (extractNumber(msg, "Heading", &heading, U_ANGLE) && getJSONValue(msg, "Reference", referenceString, sizeof(referenceString)))
   {
-    if (getJSONValue(msg, "Deviation", deviationString, sizeof(deviationString))
-        && getJSONValue(msg, "Variation", variationString, sizeof(variationString)) && strcmp(referenceString, "Magnetic") == 0)
+    if (extractNumber(msg, "Deviation", &deviation, U_ANGLE) && extractNumber(msg, "Variation", &variation, U_ANGLE)
+        && strcmp(referenceString, "Magnetic") == 0)
     {
       /* Enough info for HDG message */
-      double dev = strtod(deviationString, 0);
-      double var = strtod(variationString, 0);
-
       nmea0183CreateMessage(msg183,
                             src,
-                            "HDG,%s,%04.1f,%c,%04.1f,%c",
-                            headingString,
-                            fabs(dev),
-                            ((dev < 0.0) ? 'W' : 'E'),
-                            fabs(var),
-                            ((var < 0.0) ? 'W' : 'E'));
+                            "HDG,%4.1f,%4.1f,%c,%4.1f,%c",
+                            heading,
+                            fabs(deviation),
+                            ((deviation < 0.0) ? 'W' : 'E'),
+                            fabs(variation),
+                            ((variation < 0.0) ? 'W' : 'E'));
     }
     else if (strcmp(referenceString, "True") == 0)
     {
-      nmea0183CreateMessage(msg183, src, "HDT,%s,T", headingString);
+      nmea0183CreateMessage(msg183, src, "HDT,%4.1f,T", heading);
     }
     else if (strcmp(referenceString, "Magnetic") == 0)
     {
-      nmea0183CreateMessage(msg183, src, "HDM,%s,M", headingString);
+      nmea0183CreateMessage(msg183, src, "HDM,%4.1f,M", heading);
     }
   }
 }
@@ -257,24 +253,21 @@ Field Number:
 
 static void nmea0183WindData(StringBuffer *msg183, int src, const char *msg)
 {
-  char speedString[30];
-  char angleString[30];
-  char referenceString[30];
+  double speed;
+  double angle;
+  char   referenceString[30];
 
-  if (getJSONValue(msg, "Wind Speed", speedString, sizeof(speedString))
-      && getJSONValue(msg, "Wind Angle", angleString, sizeof(angleString))
+  if (extractNumber(msg, "Wind Speed", &speed, U_SPEED) && extractNumber(msg, "Wind Angle", &angle, U_ANGLE)
       && getJSONValue(msg, "Reference", referenceString, sizeof(referenceString)))
   {
-    double speed = strtod(speedString, 0);
-
     if (strcmp(referenceString, "True") == 0)
     {
-      nmea0183CreateMessage(msg183, src, "MWV,%s,T,%.1f,K,A", angleString, SPEED_M_S_TO_KMH(speed));
-      nmea0183CreateMessage(msg183, src, "MWD,,T,%s,M,%.1f,N,%.1f,M", angleString, SPEED_M_S_TO_KNOTS(speed), speed);
+      nmea0183CreateMessage(msg183, src, "MWV,%4.1f,T,%.1f,K,A", angle, SPEED_M_S_TO_KMH(speed));
+      nmea0183CreateMessage(msg183, src, "MWD,,T,%4.1f,M,%.1f,N,%.1f,M", angle, SPEED_M_S_TO_KNOTS(speed), speed);
     }
     else if (strcmp(referenceString, "Apparent") == 0)
     {
-      nmea0183CreateMessage(msg183, src, "MWV,%s,R,%.1f,K,A", angleString, SPEED_M_S_TO_KMH(speed));
+      nmea0183CreateMessage(msg183, src, "MWV,%4.1f,R,%.1f,K,A", angle, SPEED_M_S_TO_KMH(speed));
     }
   }
 }
@@ -339,16 +332,19 @@ Depth","fields":{"SID":"70","Depth":"0.63","Offset":"0.500"}}
  */
 static void nmea0183WaterDepth(StringBuffer *msg183, int src, const char *msg)
 {
-  char depthString[30];
-  char offsetString[30];
+  double depth;
+  double offset;
 
-  if (getJSONValue(msg, "Depth", depthString, sizeof(depthString))
-      && getJSONValue(msg, "Offset", offsetString, sizeof(offsetString)))
+  if (extractNumber(msg, "Depth", &depth, U_DISTANCE))
   {
-    double off = strtod(offsetString, 0);
-    double dep = strtod(depthString, 0);
-
-    nmea0183CreateMessage(msg183, src, "DPT,%04.1f,%04.1f", dep, off);
+    if (extractNumber(msg, "Offset", &offset, U_DISTANCE))
+    {
+      nmea0183CreateMessage(msg183, src, "DPT,%4.1f,%4.1f", depth, offset);
+    }
+    else
+    {
+      nmea0183CreateMessage(msg183, src, "DPT,%4.1f,", depth);
+    }
   }
 }
 
@@ -376,13 +372,11 @@ Field Number:
 
 static void nmea0183WaterSpeed(StringBuffer *msg183, int src, const char *msg)
 {
-  char speedString[30];
+  double speed;
 
-  if (getJSONValue(msg, "Speed Water Referenced", speedString, sizeof(speedString)))
+  if (extractNumber(msg, "Speed Water Referenced", &speed, U_SPEED))
   {
-    double speed = strtod(speedString, 0);
-
-    nmea0183CreateMessage(msg183, src, "VHW,,T,,M,%04.1f,N,%04.1f,K", SPEED_M_S_TO_KNOTS(speed), SPEED_M_S_TO_KMH(speed));
+    nmea0183CreateMessage(msg183, src, "VHW,,T,,M,%4.1f,N,%4.1f,K", SPEED_M_S_TO_KNOTS(speed), SPEED_M_S_TO_KMH(speed));
   }
 }
 
@@ -401,15 +395,13 @@ Field Number:
 
 static void nmea0183WaterTemperature(StringBuffer *msg183, int src, const char *msg)
 {
-  char temperatureString[30];
-  char sourceString[30];
+  double temperature;
+  char   sourceString[30];
 
   if (getJSONValue(msg, "Temperature Source", sourceString, sizeof(sourceString)) && (strcmp(sourceString, "Sea Temperature") == 0)
-      && getJSONValue(msg, "Temperature", temperatureString, sizeof(temperatureString)))
+      && extractNumber(msg, "Temperature", &temperature, U_TEMPERATURE))
   {
-    double temp = strtod(temperatureString, 0);
-
-    nmea0183CreateMessage(msg183, src, "MTW,%04.1f,C", TEMP_K_TO_C(temp));
+    nmea0183CreateMessage(msg183, src, "MTW,%4.1f,C", temperature);
   }
 }
 
@@ -431,14 +423,11 @@ Field Number:
 
 static void nmea0183DistanceTraveled(StringBuffer *msg183, int src, const char *msg)
 {
-  char logString[30];
-  char tripString[30];
+  double total;
+  double trip;
 
-  if (getJSONValue(msg, "Log", logString, sizeof(logString)) && getJSONValue(msg, "Trip Log", tripString, sizeof(tripString)))
+  if (extractNumber(msg, "Log", &total, U_DISTANCE) && extractNumber(msg, "Trip Log", &trip, U_DISTANCE))
   {
-    double total = strtod(logString, 0);
-    double trip  = strtod(tripString, 0);
-
     nmea0183CreateMessage(msg183, src, "VLW,%.1f,N,%.1f,N", DIST_M_TO_NM(total), DIST_M_TO_NM(trip));
   }
 }
@@ -462,13 +451,11 @@ Field Number:
 
 static void nmea0183Rudder(StringBuffer *msg183, int src, const char *msg)
 {
-  char positionString[30];
+  double angle;
 
-  if (getJSONValue(msg, "Position", positionString, sizeof(positionString)))
+  if (extractNumber(msg, "Position", &angle, U_ANGLE))
   {
-    double pos = strtod(positionString, 0);
-
-    nmea0183CreateMessage(msg183, src, "RSA,%04.1f,A,,F", -pos);
+    nmea0183CreateMessage(msg183, src, "RSA,%4.1f,A,,F", -angle);
   }
 }
 
@@ -516,11 +503,10 @@ void convertJSONToNMEA0183(StringBuffer *msg183, const char *msg)
   struct timeval tv;
   int            rateType;
 
-  if (!getJSONValue(msg, "pgn", str, sizeof(str)))
+  if (!extractInteger(msg, "pgn", &prn))
   {
     return;
   }
-  prn = atoi(str);
 
   switch (prn)
   {
@@ -563,11 +549,10 @@ void convertJSONToNMEA0183(StringBuffer *msg183, const char *msg)
       return;
   }
 
-  if (!getJSONValue(msg, "src", str, sizeof(str)))
+  if (!extractInteger(msg, "src", &src))
   {
     return;
   }
-  src = atoi(str);
   if (srcFilter && !matchFilter(src, srcFilter))
   {
     return;
@@ -628,4 +613,31 @@ void convertJSONToNMEA0183(StringBuffer *msg183, const char *msg)
     default:
       return;
   }
+}
+
+/**
+ * Extract a value out of a JSON message,
+ * and convert the value to the units used in NMEA0183.
+ */
+bool extractNumber(const char *message, const char *fieldName, double *value, Unit unit)
+{
+  char valueStr[16];
+
+  if (getJSONValue(message, fieldName, valueStr, sizeof valueStr))
+  {
+    *value = strtod(valueStr, 0) * UNIT_CONVERSION[unit][unitSI] + UNIT_OFFSET[unit][unitSI];
+    return true;
+  }
+  *value = nan("");
+  return false;
+}
+
+/**
+ * Extract an integer value out of a JSON message,
+ */
+bool extractInteger(const char *message, const char *fieldName, int *value)
+{
+  char valueStr[16];
+
+  return getJSONValue(message, fieldName, valueStr, sizeof valueStr) && sscanf(valueStr, "%d", value) == 1;
 }

@@ -75,15 +75,12 @@ Update","fields":{"SID":9,"COG Reference":"True","COG":0.0,"SOG":0.00}} $GPVTG,,
 
 void nmea0183VTG(StringBuffer *msg183, int src, const char *msg)
 {
-  char sogString[SPEED_LENGTH];
-  char cogString[ANGLE_LENGTH];
+  double sog;
+  double cog;
 
-  if (getJSONValue(msg, "SOG", sogString, sizeof(sogString)) && getJSONValue(msg, "COG", cogString, sizeof(cogString)))
+  if (extractNumber(msg, "SOG", &sog, U_SPEED) && extractNumber(msg, "COG", &cog, U_ANGLE))
   {
-    double speed = strtod(sogString, 0);
-
-    nmea0183CreateMessage(
-        msg183, src, "VTG,%s,T,,M,%04.3f,N,%04.3f,K", cogString, SPEED_M_S_TO_KNOTS(speed), SPEED_M_S_TO_KMH(speed));
+    nmea0183CreateMessage(msg183, src, "VTG,%.1f,T,,M,%.3f,N,%.3f,K", cog, SPEED_M_S_TO_KNOTS(sog), SPEED_M_S_TO_KMH(sog));
   }
 }
 
@@ -221,12 +218,11 @@ void nmea0183AIVDM(StringBuffer *msg183, int src, const char *msg)
   char   mmsiString[MMSI_LENGTH];
   char   latString[LAT_LENGTH];
   char   lonString[LON_LENGTH];
-  char   sogString[SPEED_LENGTH];
-  char   headingString[ANGLE_LENGTH];
-  char   cogString[ANGLE_LENGTH];
-  char   rateOfTurnString[ANGLE_LENGTH];
+  double sog;
+  double heading;
+  double cog;
+  double rateOfTurn;
   char   navigationStatusString[OTHER_LENGTH];
-  double cog = 0;
 
   current_time = time(NULL);
   utc_time     = gmtime(&current_time);
@@ -234,16 +230,16 @@ void nmea0183AIVDM(StringBuffer *msg183, int src, const char *msg)
   getJSONValue(msg, "User ID", mmsiString, sizeof(mmsiString));
   getJSONValue(msg, "Latitude", latString, sizeof(latString));
   getJSONValue(msg, "Longitude", lonString, sizeof(lonString));
-  getJSONValue(msg, "SOG", sogString, sizeof(sogString));
-  getJSONValue(msg, "COG", cogString, sizeof(cogString));
-  getJSONValue(msg, "Heading", headingString, sizeof(headingString));
-  getJSONValue(msg, "Rate of Turn", rateOfTurnString, sizeof(rateOfTurnString));
+  extractNumber(msg, "SOG", &sog, U_SPEED);
+  extractNumber(msg, "COG", &cog, U_ANGLE);
+  extractNumber(msg, "Heading", &heading, U_ANGLE);
+  extractNumber(msg, "Rate of Turn", &rateOfTurn, U_ANGULAR_VELOCITY);
   getJSONValue(msg, "Nav Status", navigationStatusString, sizeof(navigationStatusString));
-
-  cog = strtod(cogString, 0);
 
   // This does not work yet. It needs to be encoded to format like !AIVDM,1,1,,B,177KQJ5000G?tO`K>RA1wUbN0TKH,0*5C - from
   // http://catb.org/gpsd/AIVDM.html nmea0183CreateMessage(msg183, src, "PVDM,%d%d%d,%s,%s,%s,%s,%s,%.3f,%s,%s", utc_time->tm_hour,
   // utc_time->tm_min, utc_time->tm_sec, mmsiString, latString, lonString, sogString, headingString, cog, rateOfTurnString,
   // navigationStatusString);
+  //
+  // Be careful that if you don't test for result of extractNumber that the value may be nan(). You can test this with isnan().
 }

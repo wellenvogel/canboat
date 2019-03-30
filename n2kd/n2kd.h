@@ -28,5 +28,6 @@ extern char *   srcFilter;
 extern bool     rateLimit;
 extern uint32_t protocol;
 extern int      debug;
+extern int      unitSI;
 
 extern int64_t epoch(void);

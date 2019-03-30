@@ -222,11 +222,7 @@ int main(int argc, char **argv)
     else
     {
       onlyPgn = strtol(av[1], 0, 10);
-      if (onlyPgn > 0)
-      {
-        printf("Only logging PGN %d\n", onlyPgn);
-      }
-      else
+      if (onlyPgn <= 0)
       {
         usage(argv, av + 1);
       }
@@ -251,6 +247,10 @@ int main(int argc, char **argv)
   if (!showJson)
   {
     logInfo("N2K packet analyzer\n" COPYRIGHT);
+  }
+  else
+  {
+    printf("{\"version\":\"%s\",\"units\":\"%s\"}\n", VERSION, showSI ? "si" : "std");
   }
 
   fillManufacturers();

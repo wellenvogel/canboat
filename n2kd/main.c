@@ -49,6 +49,7 @@ bool     rateLimit;
 
 uint32_t protocol = 1;
 int      debug    = 0;
+int      unitSI   = 0;
 
 #define SENSOR_TIMEOUT (120)       /* Timeout when PGN messages expire (no longer retransmitted) */
 #define AIS_TIMEOUT (3600)         /* AIS messages expiration is much longer */
@@ -148,9 +149,10 @@ StringBuffer nmeaMessage; /* Buffer for sending to NMEA0183 TCP clients */
 #define NMEA_RNG (MAX_PGN - MIN_PGN + 1)
 
 #define PGN_SPACE (CANBOAT_RNG + NMEA_RNG)
-#define PrnToIdx(prn)                 \
-  ((prn <= MAX_PGN) ? (prn - MIN_PGN) \
-                    : ((prn <= CANBOAT_PGN_START + CANBOAT_RNG && prn >= CANBOAT_PGN_START) ? (prn + NMEA_RNG - CANBOAT_PGN_START) : -1))
+#define PrnToIdx(prn)    \
+  ((prn <= MAX_PGN)      \
+       ? (prn - MIN_PGN) \
+       : ((prn <= CANBOAT_PGN_START + CANBOAT_RNG && prn >= CANBOAT_PGN_START) ? (prn + NMEA_RNG - CANBOAT_PGN_START) : -1))
 
 /*
  * We store messages and where they come from.
@@ -606,14 +608,27 @@ static bool storeMessage(char *line, size_t len)
 
   logDebug("storeMessage(\"%s\",%u)\n", line, len);
 
-  if (!strstr(line, "\"fields\":"))
+  if (!strstr(line, "\"fields\":") || memcmp(line, "{\"timestamp", 11) != 0)
   {
-    logDebug("Ignore: pgn %u without fields\n", prn);
-    return false;
-  }
-  if (memcmp(line, "{\"timestamp", 11) != 0)
-  {
-    logDebug("Ignore: no timestamp: '%s'\n", line);
+    if (getJSONValue(line, "version", value, sizeof(value)))
+    {
+      logInfo("Found datastream from analyzer version %s\n", value);
+      if (getJSONValue(line, "units", value, sizeof(value)))
+      {
+        if (strcmp(value, "si") == 0)
+        {
+          logInfo("Datastream uses SI units\n");
+          unitSI = 1;
+        }
+        else
+        {
+          logInfo("Datastream uses standard units\n");
+        }
+      }
+      return true;
+    }
+
+    logDebug("Ignore: no fields and timestamp: '%s'\n", line);
     return false;
   }
   if (memcmp(line + len - 2, "}}", 2) != 0)

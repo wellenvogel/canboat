@@ -24,10 +24,17 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 
 */
 
+#ifndef _NMEA0183_H
+#define _NMEA0183_H
+
 #include "common.h"
 
+extern void convertJSONToNMEA0183(StringBuffer *msg183, const char *msg);
+extern void nmea0183CreateMessage(StringBuffer *msg183, int src, const char *format, ...);
+
 /*
- * NMEA 2000 is all ISO units, so m/s, deg K, etc. except for 'degrees',
+ * NMEA 2000 is all ISO units, so m/s, deg K, etc. except for angle and angular momentum which
+ * are in rad and rad/s or deg and deg/s.
  *
  * NMEA 0183 uses various units, including metric derived and colonial.
  */
@@ -36,11 +43,23 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 #define DIST_M_TO_KM(d) ((d) / 1000.0)
 #define DIST_M_TO_NM(d) ((d) / 1852.0)
 
-// For temperature, original contributor (Julius Pabrinkis) asserts that his
-// DST800 shows value in Celcius, but I (Kees) really doubt this.
-// By checking for a 'ridiculous' value in kelvin, we can have our cake and eat it.
-// Anything below 173 deg K is assumed to be really in Celcius.
-#define TEMP_K_TO_C(t) (((t) < 173.15) ? (t) : ((t) -273.15))
+#define TEMP_K_TO_C(t) (((t) -273.15))
 
-extern void convertJSONToNMEA0183(StringBuffer *msg183, const char *msg);
-extern void nmea0183CreateMessage(StringBuffer *msg183, int src, const char *format, ...);
+typedef enum
+{
+  U_ANGLE,
+  U_ANGULAR_VELOCITY,
+  U_SPEED,
+  U_DISTANCE,
+  U_TEMPERATURE,
+  U_MAX
+} Unit;
+
+// List of conversion values for each unit. When analyser produces SI convert it to 'human standard'.
+static double UNIT_CONVERSION[U_MAX][2] = {{1, RadianToDegree}, {1, RadianToDegree}, {1, 1}, {1, 1}, {1, 1}};
+static double UNIT_OFFSET[U_MAX][2]     = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, -273.15}};
+
+extern bool extractNumber(const char *message, const char *fieldName, double *value, Unit unit);
+extern bool extractInteger(const char *message, const char *fieldName, int *value);
+
+#endif
