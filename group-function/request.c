@@ -1,9 +1,22 @@
 /*
- * Part of 'packetlogger', a CAN bus analyzer that decodes N2K messages.
- *
- * (C) 2009-2011, Keversoft B.V., Harlingen, the Netherlands
- *
- */
+
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
+
+This file is part of CANboat.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+*/
 
 #include <math.h>
 #include <stdbool.h>
@@ -19,9 +32,6 @@
 #define MAX_FIELDS 20
 
 #define PACKED __attribute__((__packed__))
-
-typedef unsigned char uint8_t;
-typedef unsigned int  uint32_t;
 
 typedef struct
 {
@@ -39,11 +49,11 @@ void usage(char **argv, char **av)
   {
     fprintf(stderr, "Unknown or invalid argument %s\n", av[0]);
   }
-  fprintf(stderr, "Usage: %s <dest> <prio> <pgn> <field>=<value> ...\n\n", argv[0]);
+  fprintf(stderr, "Usage: %s <dest> <prio> <pgn> <interval> <field>=<value> ...\n\n", argv[0]);
   fprintf(stderr, "       <field> is a decimal value\n");
   fprintf(stderr, "       <value> is a hexadecimal value; the length of the value defines how many bytes are encoded\n");
   fprintf(stderr, "       Maximum # of fields: %d\n\n", MAX_FIELDS);
-  fprintf(stderr, "This program uses PGN 126208 to request a device to report a PGN for certain values.\n");
+  fprintf(stderr, "This program uses PGN 126208 to request a device to start reporting a PGN at the given interval.\n");
   fprintf(stderr, "The use of this is thus completely dependent on what the device allows.\n\n" COPYRIGHT);
   exit(1);
 }
@@ -51,21 +61,19 @@ void usage(char **argv, char **av)
 int main(int argc, char **argv)
 {
   int                      ac = argc;
-  char **                  av = argv;
+  char                   **av = argv;
   long                     dest;
   long                     pgn;
-  long                     prio;
-  long                     fields[MAX_FIELDS];
-  long                     values[MAX_FIELDS];
+  long                     interval;
   size_t                   cnt = 0;
   command_group_function_t command;
   size_t                   i, bytes;
-  char *                   p, *e;
-  uint8_t *                b;
+  char                    *p, *e;
+  uint8_t                 *b;
   uint32_t                 v;
   char                     dateStr[DATE_LENGTH];
 
-  if (ac < 5 || ac > 4 + MAX_FIELDS)
+  if (ac < 6 || ac > 5 + MAX_FIELDS)
   {
     usage(argv, 0);
   }
@@ -73,10 +81,12 @@ int main(int argc, char **argv)
   ac--, av++; /* lose the command name */
   dest = strtol(av[0], 0, 10);
   ac--, av++; /* lose the dest */
-  prio = strtol(av[0], 0, 10);
+  /* ignore */ strtol(av[0], 0, 10);
   ac--, av++; /* lose the prio */
   pgn = strtol(av[0], 0, 10);
   ac--, av++; /* lose the pgn */
+  interval = strtol(av[0], 0, 10);
+  ac--, av++; /* lose the interval */
   b = &command.parameters[0];
 
   for (; ac; ac--, av++)
@@ -106,6 +116,8 @@ int main(int argc, char **argv)
   command.pgn[0]       = (pgn) &0xff;
   command.pgn[1]       = (pgn >> 8) & 0xff;
   command.pgn[2]       = (pgn >> 16);
+  command.interval     = interval;
+  command.offset       = 0;
   command.count        = cnt;
 
   bytes = b - (uint8_t *) &command;

@@ -4,29 +4,31 @@
 Runs a TCP server, single threaded. It reads JSON styled NMEA 2000 records (lines)
 from stdin, collects this data and sends this out on three types of TCP clients:
 
-- Non stream JSON type get all accumulated data.
+- Non stream JSON type get all accumulated data except for AIS.
 - Stream JSON type just receive exactly the same messages as this program
   receives.
 - NMEA0183 stream type get those messages which this program knows how to translate
   into NMEA0183. The two letter talkers is the hexadecimal code for the NMEA2000
   sender.
+- Non stream JSON type gets all AIS data.
+- Write-only port to write to serial device (NGT-1, iKonvert, YDWG, etc.)
 
-(C) 2009-2013, Kees Verruijt, Harlingen, The Netherlands.
+
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
 
 This file is part of CANboat.
 
-CANboat is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-CANboat is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU General Public License
-along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 */
 
@@ -35,6 +37,7 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <signal.h>
 #include <sys/select.h>
+
 #include "common.h"
 #include "n2kd.h"
 #include "nmea0183.h"
@@ -44,11 +47,15 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 #define UPDATE_INTERVAL (500) /* Every x milliseconds send the normal 'once' clients all state */
 
 uint16_t port      = PORT;
-char *   srcFilter = 0;
+char    *srcFilter = 0;
 bool     rateLimit;
+bool     udp183;
+bool     stop;
 
 uint32_t protocol = 1;
-int      debug    = 0;
+bool     unitSI   = false;
+
+struct sockaddr_in udpWildcardAddress;
 
 #define SENSOR_TIMEOUT (120)       /* Timeout when PGN messages expire (no longer retransmitted) */
 #define AIS_TIMEOUT (3600)         /* AIS messages expiration is much longer */
@@ -60,7 +67,7 @@ static void closeStream(int i);
 typedef void (*ReadHandler)(int i);
 /* ... is the prototype for the following types of read-read file descriptors: */
 static void handleClientRequest(int i);
-static void checkEof(int i);
+static void closeClientRequest(int i);
 static void acceptAISClient(int i);
 static void acceptRawInputClient(int i);
 static void acceptJSONClient(int i);
@@ -85,10 +92,12 @@ typedef enum StreamType
   SERVER_JSON,
   SERVER_JSON_STREAM,
   SERVER_NMEA0183_STREAM,
+  SERVER_NMEA0183_DATAGRAM,
   DATA_INPUT_STREAM,
   DATA_OUTPUT_SINK,
   DATA_OUTPUT_COPY,
   DATA_OUTPUT_STREAM,
+  DATA_OUTPUT_NMEA0183_STREAM,
   SOCKET_TYPE_MAX
 } StreamType;
 
@@ -103,10 +112,12 @@ const char *streamTypeName[] = {"Any",
                                 "JSON server",
                                 "JSON stream server",
                                 "NMEA0183 stream server",
+                                "NMEA0183 datagram server",
                                 "Data input stream",
                                 "Data output sink",
                                 "Data output copy",
                                 "Data output stream",
+                                "Data output NMEA0183 stream",
                                 "<Max>"};
 
 ReadHandler readHandlers[SOCKET_TYPE_MAX] = {0,
@@ -114,15 +125,17 @@ ReadHandler readHandlers[SOCKET_TYPE_MAX] = {0,
                                              handleClientRequest,
                                              handleClientRequest,
                                              handleClientRequest,
-                                             checkEof,
+                                             closeClientRequest,
                                              acceptAISClient,
                                              acceptRawInputClient,
                                              acceptJSONClient,
                                              acceptJSONStreamClient,
                                              acceptNMEA0183StreamClient,
+                                             0,
                                              handleClientRequest,
-                                             0,
-                                             0,
+                                             closeClientRequest,
+                                             closeClientRequest,
+                                             closeClientRequest,
                                              0};
 
 int    socketIdxMin = 0;
@@ -134,18 +147,21 @@ fd_set writeSet;
 
 typedef struct StreamInfo
 {
-  SOCKET      fd;
-  StreamType  type;
-  int64_t     timeout;
-  ReadHandler readHandler;
-  char        buffer[32768]; /* Lines longer than this might get into trouble */
-  size_t      len;
+  SOCKET       fd;
+  StreamType   type;
+  int64_t      timeout;
+  ReadHandler  readHandler;
+  char         buffer[32768]; /* Lines longer than this might get into trouble */
+  StringBuffer writeBuffer;
+  size_t       len;
 } StreamInfo;
 
 StreamInfo stream[FD_SETSIZE];
 
 const int stdinfd  = 0; /* The fd for the stdin port, this receives the analyzed stream of N2K data. */
 const int stdoutfd = 1; /* Possible fd for the stdout port */
+
+bool haveNMEA0183Client = false;
 
 int outputIdx = -1;
 
@@ -179,9 +195,9 @@ StringBuffer nmeaMessage; /* Buffer for sending to NMEA0183 TCP clients */
 typedef struct
 {
   uint8_t m_src;
-  char *  m_key2;
-  time_t  m_time;
-  char *  m_text;
+  char   *m_key2;
+  time_t  m_time; // Message valid until this time
+  char   *m_text;
 } Message;
 
 /*
@@ -192,38 +208,38 @@ typedef struct
 {
   unsigned int p_prn;
   unsigned int p_maxSrc;
-  char *       p_description;
+  char        *p_description;
   Message      p_message[];
 } Pgn;
 
 /*
- * An index from PRN to index in the data[] array. By keeping
- * the PGNs that we have seen coalesced in data[] we can loop over all
- * of them very efficiently.
+ * An array of pointers to arrays of Pgn, indexed by PrnToIdx(prn);
+ * Each pointer points to an array of Pgn structures, dynamically allocated.
  */
 Pgn *pgnIdx[PGN_SPACE];
 
 /*
- * Support for 512 different PGNs. Since this is more than there are defined
- * by the NMEA this does not need to be variable.
+ * Keep track of which pgnIdx[] entries are non zero.
  * Each entry points to the location of pgnIdx[...].
+ * This is just a speed up to avoid looping over lots of empty
+ * entries in pgnIdx.
  */
-Pgn ** pgnList[512];
+Pgn  **pgnList[512];
 size_t maxPgnList;
 
 /*
- * If one of the fiels is named like one of these then we index
+ * If one of the fields is named like one of these then we index
  * the array by its value as well.
  *
  * The easiest insight is that an AIS transmission from a particular User ID
  * is completely separate from that of any other.
  */
 static char *secondaryKeyList[] = {
-    "Instance\"",        // A different tank or sensor. Note no leading " so any instance will do.
-    "\"Reference\"",     // A different type of data value, for instance "True" and "Apparent"
-    "\"User ID\"",       // Different AIS transmission source (station)
-    "\"Message ID\"",    // Different AIS transmission source (station)
-    "\"Proprietary ID\"" // Different SonicHub item
+    "Instance\":",        // A different tank or sensor. Note no leading " so any instance will do.
+    "\"Reference\":",     // A different type of data value, for instance "True" and "Apparent"
+    "\"User ID\":",       // Different AIS transmission source (station)
+    "\"Message ID\":",    // Different AIS transmission source (station)
+    "\"Proprietary ID\":" // Different SonicHub item
 };
 
 static int secondaryKeyTimeout[] = {SENSOR_TIMEOUT, SENSOR_TIMEOUT, AIS_TIMEOUT, AIS_TIMEOUT, SONICHUB_TIMEOUT, SENSOR_TIMEOUT};
@@ -237,11 +253,6 @@ static int secondaryKeyTimeout[] = {SENSOR_TIMEOUT, SENSOR_TIMEOUT, AIS_TIMEOUT,
 
 /*****************************************************************************************/
 
-static void breakHere(void)
-{
-  abort();
-}
-
 int64_t epoch(void)
 {
   struct timeval t;
@@ -253,7 +264,27 @@ int64_t epoch(void)
   return (int64_t) t.tv_sec * 1000 + t.tv_usec / 1000;
 }
 
-int setFdUsed(SOCKET fd, StreamType ct)
+static void setHaveNMEA0183Client(void)
+{
+  int i;
+
+  haveNMEA0183Client = udp183;
+  if (!haveNMEA0183Client)
+  {
+    for (i = 0; i <= socketIdxMax; i++)
+    {
+      if (stream[i].fd != INVALID_SOCKET
+          && (stream[i].type == CLIENT_NMEA0183_STREAM || stream[i].type == SERVER_NMEA0183_DATAGRAM
+              || stream[i].type == DATA_OUTPUT_NMEA0183_STREAM))
+      {
+        haveNMEA0183Client = true;
+        return;
+      }
+    }
+  }
+}
+
+static int setFdUsed(SOCKET fd, StreamType ct)
 {
   int i;
 
@@ -277,6 +308,7 @@ int setFdUsed(SOCKET fd, StreamType ct)
   stream[i].timeout     = epoch() + UPDATE_INTERVAL;
   stream[i].type        = ct;
   stream[i].readHandler = readHandlers[ct];
+  stream[i].writeBuffer = sbNew;
 
   FD_SET(fd, &activeSet);
   if (stream[i].readHandler)
@@ -286,6 +318,7 @@ int setFdUsed(SOCKET fd, StreamType ct)
   else
   {
     FD_CLR(fd, &readSet);
+    /* ignore */ shutdown(fd, SHUT_RD);
   }
 
   switch (stream[i].type)
@@ -296,16 +329,33 @@ int setFdUsed(SOCKET fd, StreamType ct)
     case CLIENT_NMEA0183_STREAM:
     case DATA_OUTPUT_STREAM:
     case DATA_OUTPUT_COPY:
+    case DATA_OUTPUT_NMEA0183_STREAM:
+    case SERVER_NMEA0183_DATAGRAM:
       FD_SET(fd, &writeSet);
       break;
     default:
       FD_CLR(fd, &writeSet);
+      /* ignore */ shutdown(fd, SHUT_WR);
   }
+
+#ifdef O_NONBLOCK
+  {
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  }
+#else
+  {
+    int ioctlOptionValue = 1;
+
+    ioctl(fd, FIONBIO, &ioctlOptionValue);
+  }
+#endif
 
   socketIdxMax = CB_MAX(socketIdxMax, i);
   socketFdMax  = CB_MAX(socketFdMax, fd);
   logDebug("New %s %u (%u..%u fd=%d fdMax=%d)\n", streamTypeName[stream[i].type], i, socketIdxMin, socketIdxMax, fd, socketFdMax);
 
+  setHaveNMEA0183Client();
   return i;
 }
 
@@ -317,6 +367,7 @@ static void closeStream(int i)
   FD_CLR(stream[i].fd, &activeSet);
   FD_CLR(stream[i].fd, &readSet);
   FD_CLR(stream[i].fd, &writeSet);
+  sbClean(&stream[i].writeBuffer);
 
   stream[i].fd = INVALID_SOCKET; /* Free for re-use */
   if (i == socketIdxMax)
@@ -332,6 +383,7 @@ static void closeStream(int i)
       }
     }
   }
+  setHaveNMEA0183Client();
   logDebug("closeStream(%d) (%u..%u fdMax=%d)\n", i, socketIdxMin, socketIdxMax, socketFdMax);
 }
 
@@ -341,11 +393,10 @@ static char *getFullStateJSON(StreamType stream)
   char         separator = '{';
   time_t       now       = time(0);
 
-  int    i, s;
-  Pgn *  pgn;
-  size_t l;
+  int  i, s;
+  Pgn *pgn;
 
-  for (l = 0, i = 0; i < maxPgnList; i++)
+  for (i = 0; i < maxPgnList; i++)
   {
     pgn = *pgnList[i];
 
@@ -389,8 +440,9 @@ static void tcpServer(uint16_t port, StreamType st)
   int                r;
   int                on = 1;
   SOCKET             s;
+  bool               udp = (st == SERVER_NMEA0183_DATAGRAM);
 
-  s = socket(PF_INET, SOCK_STREAM, 0);
+  s = socket(PF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0);
   if (s == INVALID_SOCKET)
   {
     die("Unable to open server socket");
@@ -408,26 +460,19 @@ static void tcpServer(uint16_t port, StreamType st)
     die("Unable to bind server socket");
   }
 
-  r = listen(s, 10);
-  if (r == INVALID_SOCKET)
+  if (!udp)
   {
-    die("Unable to listen to server socket");
+    r = listen(s, 10);
+    if (r == INVALID_SOCKET)
+    {
+      die("Unable to listen to server socket");
+    }
+  }
+  else
+  {
+    setsockopt(s, SOL_SOCKET, SO_BROADCAST, (char *) &on, (socklen_t) sizeof(on));
   }
 
-#ifdef O_NONBLOCK
-  {
-    int flags = fcntl(s, F_GETFL, 0);
-    fcntl(s, F_SETFL, flags | O_NONBLOCK);
-  }
-#else
-  {
-    int ioctlOptionValue = 1;
-
-    ioctl(s, FIONBIO, &ioctlOptionValue);
-  }
-#endif
-
-  logDebug("TCP server fd=%d\n", s);
   setFdUsed(s, st);
 }
 
@@ -437,10 +482,20 @@ static void startTcpServers(void)
   logInfo("TCP JSON server listening on port %d\n", port);
   tcpServer(port + 1, SERVER_JSON_STREAM);
   logInfo("TCP JSON stream server listening on port %d\n", port + 1);
-  tcpServer(port + 2, SERVER_NMEA0183_STREAM);
-  logInfo("TCP NMEA0183 server listening on port %d\n", port + 2);
+  if (udp183)
+  {
+    tcpServer(port + 2, SERVER_NMEA0183_DATAGRAM);
+    logInfo("UDP NMEA0183 datagram server sending on port %d\n", port + 2);
+  }
+  else
+  {
+    tcpServer(port + 2, SERVER_NMEA0183_STREAM);
+    logInfo("TCP NMEA0183 server listening on port %d\n", port + 2);
+  }
+
   tcpServer(port + 3, SERVER_INPUT_STREAM);
   logInfo("TCP input stream server listening on port %d\n", port + 3);
+
   tcpServer(port + 4, SERVER_AIS);
   logInfo("TCP AIS server listening on port %d\n", port + 4);
 }
@@ -495,24 +550,89 @@ static void acceptNMEA0183StreamClient(int i)
   acceptClient(stream[i].fd, CLIENT_NMEA0183_STREAM);
 }
 
-void writeAllClients(void)
+static void writeAndClose(int idx, char *data, size_t len)
+{
+  write(stream[idx].fd, data, len);
+  closeStream(idx);
+}
+
+static void safeWriteBuffer(int idx, StringBuffer *sb)
+{
+  int r;
+
+  if (stream[idx].writeBuffer.len > 0 && sb != &stream[idx].writeBuffer)
+  {
+    // Awww shit, last time we did not write everything, append the
+    // new bits to the old unwritten data and try to write the buffered
+    // data
+    sbAppendData(&stream[idx].writeBuffer, sb->data, sb->len);
+    sb = &stream[idx].writeBuffer;
+  }
+
+  // We are told the stream is ready to write, but it is in non-blocked
+  // mode so it can write less than the buffer.
+
+  r = write(stream[idx].fd, sb->data, sb->len);
+  if (r < sb->len)
+  {
+    if (r <= 0)
+    {
+      if (errno != EAGAIN)
+      {
+        if (stream[idx].type == DATA_OUTPUT_COPY || stream[idx].type == DATA_OUTPUT_STREAM)
+        {
+          logAbort("Cannot write to stdout: %s\n", strerror(errno));
+        }
+        logError("Closing %s stream %d: %s\n", streamTypeName[stream[idx].type], stream[idx].fd, strerror(errno));
+        closeStream(idx);
+      }
+    }
+    else
+    {
+      if (sb == &stream[idx].writeBuffer)
+      {
+        // Remove the part of the buffer we did write
+        sbDelete(sb, 0, (size_t) r);
+      }
+      else
+      {
+        // Store the remaining part in the per-fd writebuffer
+        // and write it on the next attempt
+        sbAppendData(&stream[idx].writeBuffer, sb->data + r, sb->len - r);
+      }
+    }
+  }
+  else
+  {
+    if (sb == &stream[idx].writeBuffer)
+    {
+      sbEmpty(sb);
+    }
+  }
+}
+
+static void writeAllClients(void)
 {
   fd_set         ws;
+  fd_set         es;
   struct timeval timeout = {0, 0};
   int            r;
   int            i;
   SOCKET         fd;
   int64_t        now      = 0;
-  char *         aisState = 0;
-  char *         state    = 0;
+  char          *aisState = 0;
+  char          *state    = 0;
 
-  logDebug("writeAllClients tcp.len=%d\n", tcpMessage.len);
+  logDebug("writeAllClients tcp=%d out=%d nmea=%d\n", tcpMessage.len, outMessage.len, nmeaMessage.len);
   FD_ZERO(&ws);
+  FD_ZERO(&es);
 
   if (socketIdxMax >= 0)
   {
-    ws = writeSet;
-    r  = select(socketFdMax + 1, 0, &ws, 0, &timeout);
+    ws  = writeSet;
+    es  = writeSet;
+    r   = select(socketFdMax + 1, 0, &ws, &es, &timeout);
+    now = epoch();
     logDebug("write to %d streams (%u..%u fdMax=%d)\n", r, socketIdxMin, socketIdxMax, socketFdMax);
 
     for (i = socketIdxMin; r > 0 && i <= socketIdxMax; i++)
@@ -530,12 +650,26 @@ void writeAllClients(void)
       {
         logAbort("Inconsistent: fd[%u]=%d, fdMax=%d\n", i, fd, socketFdMax);
       }
-      if (FD_ISSET(fd, &ws))
+      if (FD_ISSET(fd, &es) && fd != stdoutfd)
       {
-        logDebug("%s i=%u fd=%d writable=%d\n", streamTypeName[stream[i].type], i, fd, FD_ISSET(fd, &ws));
+        logDebug("%s i=%u fd=%d write error, closing\n", streamTypeName[stream[i].type], i, fd);
+        closeStream(i);
+      }
+      else if (FD_ISSET(fd, &ws))
+      {
+        logDebug("%s i=%u fd=%d writable=%d timeout=%" PRId64 "\n",
+                 streamTypeName[stream[i].type],
+                 i,
+                 fd,
+                 FD_ISSET(fd, &ws),
+                 stream[i].timeout);
         r--;
-        if (!now)
-          now = epoch();
+
+        if (stream[i].writeBuffer.len > 0)
+        {
+          safeWriteBuffer(i, &stream[i].writeBuffer);
+          continue;
+        }
 
         switch (stream[i].type)
         {
@@ -546,9 +680,7 @@ void writeAllClients(void)
               {
                 aisState = getFullStateJSON(CLIENT_AIS);
               }
-              write(fd, aisState, strlen(aisState));
-              logDebug("JSON: wrote %u to %d, closing\n", strlen(aisState), fd);
-              closeStream(i);
+              writeAndClose(i, aisState, strlen(aisState));
             }
             break;
           case CLIENT_JSON:
@@ -559,29 +691,35 @@ void writeAllClients(void)
                 state = getFullStateJSON(CLIENT_JSON);
                 logDebug("json=%s", state);
               }
-              write(fd, state, strlen(state));
-              logDebug("JSON: wrote %u to %d, closing\n", strlen(state), fd);
-              closeStream(i);
+              writeAndClose(i, state, strlen(state));
             }
             break;
           case CLIENT_NMEA0183_STREAM:
+          case DATA_OUTPUT_NMEA0183_STREAM:
             logDebug("NMEA-> %d\n", nmeaMessage.len);
             if (nmeaMessage.len)
             {
-              write(fd, nmeaMessage.data, nmeaMessage.len);
+              safeWriteBuffer(i, &nmeaMessage);
+            }
+            break;
+          case SERVER_NMEA0183_DATAGRAM:
+            logDebug("udp NMEA-> %d\n", nmeaMessage.len);
+            if (nmeaMessage.len)
+            {
+              sendto(fd, nmeaMessage.data, nmeaMessage.len, 0, (struct sockaddr *) &udpWildcardAddress, sizeof(udpWildcardAddress));
             }
             break;
           case CLIENT_JSON_STREAM:
             if (tcpMessage.len)
             {
-              write(fd, tcpMessage.data, tcpMessage.len);
+              safeWriteBuffer(i, &tcpMessage);
             }
             break;
           case DATA_OUTPUT_STREAM:
           case DATA_OUTPUT_COPY:
             if (outMessage.len)
             {
-              write(fd, outMessage.data, outMessage.len);
+              safeWriteBuffer(i, &outMessage);
             }
             break;
           default:
@@ -601,9 +739,9 @@ void writeAllClients(void)
     free(state);
   }
 
-  outMessage.len  = 0;
-  tcpMessage.len  = 0;
-  nmeaMessage.len = 0;
+  sbEmpty(&tcpMessage);
+  sbEmpty(&nmeaMessage);
+  sbEmpty(&outMessage);
 
 #ifdef NEVER
   {
@@ -616,25 +754,85 @@ void writeAllClients(void)
 #endif
 }
 
+static void checkSrcIsKnown(int src, time_t n)
+{
+  static const int PRODUCT_INFO_IDX = PrnToIdx(126996);
+  int              i;
+  Pgn             *pgn = pgnIdx[PRODUCT_INFO_IDX];
+
+  if (src == 0)
+  {
+    return;
+  }
+
+  if (pgn != NULL)
+  {
+    for (i = 0; i < pgn->p_maxSrc; i++)
+    {
+      if (pgn->p_message[i].m_src == src && pgn->p_message[i].m_time >= n)
+      {
+        // Yes, we have product information for this source
+        return;
+      }
+    }
+  }
+
+  // Oops, no product info for this source
+  logInfo("New device src=%d seen\n", src);
+
+  if (stream[stdoutfd].type == DATA_OUTPUT_COPY || stream[stdoutfd].type == DATA_OUTPUT_STREAM)
+  {
+    char         strTmp[DATE_LENGTH];
+    StringBuffer msg = sbNew;
+
+    sbAppendFormat(&msg, "%s,6,59904,0,%d,3,14,f0,01\n", now(strTmp), src);
+    safeWriteBuffer(stdoutfd, &msg);
+    sbClean(&msg);
+  }
+}
+
 static bool storeMessage(char *line, size_t len)
 {
-  char *   s, *e = 0, *e2;
+  char    *s, *e = 0, *e2;
   Message *m;
   int      i, idx, k;
-  int      src, dst, prn = 0;
-  Pgn *    pgn;
+  int      src = 0, dst = 255, prn = 0;
+  Pgn     *pgn;
   time_t   now;
-  char *   key2 = 0;
+  char    *key2 = 0;
   int      valid;
   char     value[16];
 
   now = time(0);
 
-  logDebug("storeMessage(\"%s\",%u)\n", line, len);
-
-  if (!strstr(line, "\"fields\":"))
+  if (isLogLevelEnabled(LOG_DEBUG))
   {
-    logDebug("Ignore: pgn %u without fields\n", prn);
+    if (len > 80)
+    {
+      logDebug("storeMessage(\"%1.20s...%1.20s\",%u)\n", line, line + len - 20, len);
+    }
+    else
+    {
+      logDebug("storeMessage(\"%s\",%u)\n", line, len);
+    }
+  }
+
+  if (!strstr(line, "\"fields\":") || memcmp(line, "{\"timestamp", 11) != 0)
+  {
+    if (getJSONValue(line, "version", value, sizeof(value)))
+    {
+      logInfo("Found datastream from analyzer version %s\n", value);
+      if (getJSONValue(line, "units", value, sizeof(value)))
+      {
+        if (strcmp(value, "si") == 0)
+        {
+          logInfo("Datastream uses SI units\n");
+          unitSI = true;
+        }
+      }
+      return true;
+    }
+    logDebug("Ignore: no fields and timestamp\n");
     return false;
   }
   if (memcmp(line, "{\"timestamp", 11) != 0)
@@ -679,6 +877,15 @@ static bool storeMessage(char *line, size_t len)
     {
       logDebug("Found 2nd key %d = %s\n", k, secondaryKeyList[k]);
       s += strlen(secondaryKeyList[k]);
+      if (*s == '{')
+      {
+        s = strstr(s, "name\":");
+        if (s == NULL)
+        {
+          continue;
+        }
+        s += STRSIZE("name\":");
+      }
       while (strchr(SKIP_CHARACTERS, *s))
       {
         s++;
@@ -701,7 +908,7 @@ static bool storeMessage(char *line, size_t len)
       key2 = malloc(e - s + 1);
       if (!key2)
       {
-        logAbort("Out of memory allocating %u bytes", e - s);
+        logAbort("Out of memory allocating %u bytes\n", e - s);
       }
       memcpy(key2, s, e - s);
       key2[e - s] = 0;
@@ -720,7 +927,7 @@ static bool storeMessage(char *line, size_t len)
     pgn = calloc(1, sizeof(Pgn) + sizeof(Message));
     if (!pgn)
     {
-      logAbort("Out of memory allocating %u bytes", sizeof(Pgn) + sizeof(Message));
+      logAbort("Out of memory allocating %u bytes\n", sizeof(Pgn) + sizeof(Message));
     }
     pgnIdx[idx]           = pgn;
     pgnList[maxPgnList++] = &pgnIdx[idx];
@@ -749,7 +956,7 @@ static bool storeMessage(char *line, size_t len)
       pgn->p_description = malloc(e - s + 1);
       if (!pgn->p_description)
       {
-        logAbort("Out of memory allocating %u bytes", e - s);
+        logAbort("Out of memory allocating %u bytes\n", e - s);
       }
       memcpy(pgn->p_description, s, e - s);
       pgn->p_description[e - s] = 0;
@@ -804,7 +1011,7 @@ static bool storeMessage(char *line, size_t len)
     pgn     = realloc(pgnIdx[idx], newSize);
     if (!pgn)
     {
-      logAbort("Out of memory allocating %u bytes", newSize);
+      logAbort("Out of memory allocating %u bytes\n", newSize);
     }
     pgnIdx[idx]              = pgn;
     pgn->p_message[i].m_src  = (uint8_t) src;
@@ -824,7 +1031,7 @@ static bool storeMessage(char *line, size_t len)
   }
   if (!m->m_text)
   {
-    logAbort("Out of memory allocating %u bytes", len + 1);
+    logAbort("Out of memory allocating %u bytes\n", len + 1);
   }
   memcpy(m->m_text, line, len);
   m->m_text[len]     = '\n';
@@ -848,34 +1055,18 @@ static bool storeMessage(char *line, size_t len)
     free(key2);
   }
   m->m_time = now + valid;
+
+  if (prn != 126996)
+  {
+    checkSrcIsKnown(src, now);
+  }
   return true;
 }
-void checkEof(int i)
+
+static void handleClientRequest(int i)
 {
   ssize_t r;
-  char buf[100];
-  
-  logDebug("checkEof: read i=%d\n", i);
-  logDebug("checkEof %s i=%d fd=%d \n", streamTypeName[stream[i].type], i, stream[i].fd);
-  r = read(stream[i].fd, buf, 99);
-
-  if (r <= 0)
-  {
-    logDebug("checkEof %s i=%d fd=%d r=%d\n", streamTypeName[stream[i].type], i, stream[i].fd, r);
-    if (stream[i].type == DATA_INPUT_STREAM)
-    {
-      logAbort("EOF on reading stdin\n");
-    }
-    closeStream(i);
-    return;
-  }
-}
-
-
-void handleClientRequest(int i)
-{
-  ssize_t r;
-  char *  p;
+  char   *p;
   size_t  remain;
 
   if (stream[i].len >= sizeof(stream[i].buffer) - 2)
@@ -893,18 +1084,24 @@ void handleClientRequest(int i)
     logDebug("read %s i=%d fd=%d r=%d\n", streamTypeName[stream[i].type], i, stream[i].fd, r);
     if (stream[i].type == DATA_INPUT_STREAM)
     {
-      logAbort("EOF on reading stdin\n");
+      stop = true;
     }
-    closeStream(i);
-    return;
+    else
+    {
+      closeStream(i);
+      return;
+    }
   }
+  logDebug("processing stream %d\n", i);
 
   stream[i].len += r;
   stream[i].buffer[stream[i].len] = 0;
+
   while (stream[i].len > 0)
   {
     size_t len;
 
+    logDebug("processing stream %d buffer '%-1.20s...' len=%zu\n", i, stream[i].buffer, stream[i].len);
     p = strchr(stream[i].buffer, '\n');
     if (!p)
     {
@@ -926,7 +1123,7 @@ void handleClientRequest(int i)
       }
     }
     *p = 0;
-    if (storeMessage(stream[i].buffer, len))
+    if (storeMessage(stream[i].buffer, len) && haveNMEA0183Client)
     {
       convertJSONToNMEA0183(&nmeaMessage, stream[i].buffer);
     }
@@ -938,9 +1135,22 @@ void handleClientRequest(int i)
   }
 }
 
-void checkReadEvents(void)
+static void closeClientRequest(int i)
+{
+  ssize_t r;
+  char    buf[4];
+
+  logDebug("closeClientRequest: read i=%d\n", i);
+  r = read(stream[i].fd, buf, sizeof(buf));
+
+  logDebug("close-on-eof %s r=%d i=%d fd=%d %s\n", streamTypeName[stream[i].type], (int) r, i, stream[i].fd, strerror(errno));
+  closeStream(i);
+}
+
+static void checkReadEvents(void)
 {
   fd_set         rs;
+  fd_set         es;
   struct timeval timeout = {1, 0};
   int            r;
   size_t         i;
@@ -949,13 +1159,19 @@ void checkReadEvents(void)
   logDebug("checkReadEvents fdMax=%d\n", socketFdMax);
 
   rs = readSet;
+  es = readSet;
 
-  r = select(socketFdMax + 1, &rs, 0, 0, &timeout);
+  r = select(socketFdMax + 1, &rs, 0, &es, &timeout);
 
   for (i = socketIdxMin; r > 0 && i <= socketIdxMax; i++)
   {
     fd = stream[i].fd;
 
+    if (fd >= 0 && FD_ISSET(fd, &es))
+    {
+      logDebug("%s i=%u fd=%d read error, closing\n", streamTypeName[stream[i].type], i, fd);
+      closeStream(i);
+    }
     if (fd >= 0 && FD_ISSET(fd, &rs))
     {
       (stream[i].readHandler)(i);
@@ -964,18 +1180,82 @@ void checkReadEvents(void)
   }
 }
 
-void doServerWork(void)
+static void doServerWork(void)
 {
-  for (;;)
+  do
   {
     /* Do a range of non-blocking operations */
     checkReadEvents(); /* Process incoming requests on all clients */
     writeAllClients(); /* Check any timeouts on clients */
+  } while (!stop);
+}
+
+bool parseUDPAddress(char *target, char *port)
+{
+  int              r;
+  struct addrinfo  hints;
+  struct addrinfo *res, *res0;
+
+  hints.ai_flags    = 0;
+  hints.ai_family   = PF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_protocol = IPPROTO_UDP;
+  hints.ai_flags    = AI_NUMERICHOST;
+
+  r = getaddrinfo(target, port, &hints, &res0);
+  if (r)
+  {
+    return false;
+  }
+  for (res = res0; res; res = res->ai_next)
+  {
+    if (res->ai_addrlen == sizeof udpWildcardAddress)
+    {
+      memcpy(&udpWildcardAddress, res->ai_addr, sizeof udpWildcardAddress);
+      return true;
+    }
+  }
+  return false;
+}
+
+static void verifyStdin(void)
+{
+  int     i      = 0;
+  size_t  remain = sizeof(stream[0].buffer) - 1;
+  ssize_t r;
+  char   *line_end;
+
+  for (;;)
+  {
+    r = read(stream[i].fd, stream[i].buffer + stream[i].len, remain);
+    if (r > 0)
+    {
+      stream[i].len += r;
+      stream[i].buffer[stream[i].len] = '\0';
+      line_end                        = strchr(stream[i].buffer, '\n');
+      if (line_end != NULL)
+      {
+        if (strstr(stream[i].buffer, "\"version\":") == NULL || strstr(stream[i].buffer, "\"showLookupValues\":true") == NULL)
+        {
+          logAbort("Standard input must be piped from `analyzer` in `-json -nv` mode\n");
+        }
+        remain = stream[i].buffer + stream[i].len - (line_end + 1);
+        memcpy(stream[i].buffer, line_end + 1, remain);
+        stream[i].len = remain;
+        break;
+      }
+    }
+    else
+    {
+      logAbort("Cannot read from piped input from `analyzer`\n");
+    }
   }
 }
 
 int main(int argc, char **argv)
 {
+  bool noServers = false;
+
   struct sigaction sa;
 
   setProgName(argv[0]);
@@ -984,7 +1264,6 @@ int main(int argc, char **argv)
   FD_ZERO(&readSet);
   FD_ZERO(&writeSet);
 
-  setFdUsed(stdinfd, DATA_INPUT_STREAM);
   outputIdx = setFdUsed(stdoutfd, DATA_OUTPUT_STREAM);
 
   while (argc > 1)
@@ -997,7 +1276,6 @@ int main(int argc, char **argv)
     else if (strcasecmp(argv[1], "-d") == 0)
     {
       setLogLevel(LOGLEVEL_DEBUG);
-      debug = 1;
     }
     else if (strcasecmp(argv[1], "-q") == 0)
     {
@@ -1010,6 +1288,17 @@ int main(int argc, char **argv)
     else if (strcasecmp(argv[1], "-r") == 0)
     {
       outputIdx = setFdUsed(stdoutfd, DATA_OUTPUT_SINK);
+    }
+    else if (strcasecmp(argv[1], "-u") == 0 && argc > 3)
+    {
+      if (!parseUDPAddress(argv[2], argv[3]))
+      {
+        logError("Invalid UDP address + port\n");
+        exit(1);
+      }
+      udp183 = true;
+      argc -= 2;
+      argv += 2;
     }
     else if (strcasecmp(argv[1], "--src-filter") == 0 && argc > 2)
     {
@@ -1030,6 +1319,16 @@ int main(int argc, char **argv)
       }
       argc--, argv++;
     }
+    else if (strcasecmp(argv[1], "--nmea0183") == 0)
+    {
+      outputIdx = setFdUsed(stdoutfd, DATA_OUTPUT_NMEA0183_STREAM);
+      noServers = true;
+    }
+    else if (strcasecmp(argv[1], "-fixtime") == 0 && argc > 2)
+    {
+      setFixedTimestamp(argv[2]);
+      argc--, argv++;
+    }
     else
     {
       fprintf(stderr,
@@ -1041,13 +1340,23 @@ int main(int argc, char **argv)
               "  --src-filter <srclist>  restrict NMEA0183 stream to particular N2K sources\n"
               "  --rate-limit            restrict NMEA0183 stream to one message per source per second\n"
               "  -p <port>               Start servers at <port> instead of 2597\n"
+              "  -u <target-addr> <port> Send UDP datagrams to UDP address indicated, can be wildcard address\n"
+              "  --nmea0183              Start no servers and send NMEA0183 data on stdout (this is mainly for debugging)\n"
+              "  -fixtime str            Print str as timestamp in logging\n"
               "  -version                Show version number on stdout\n\n" COPYRIGHT);
       exit(1);
     }
     argc--, argv++;
   }
 
-  startTcpServers();
+  // Read the first line from stdin, this must contain JSON from analyzer
+  verifyStdin();
+  setFdUsed(stdinfd, DATA_INPUT_STREAM);
+
+  if (!noServers)
+  {
+    startTcpServers();
+  }
 
   /*  Ignore SIGPIPE, this will let a write to a socket that's closed   */
   /*  at the other end just fail instead of raising SIGPIPE             */
@@ -1057,5 +1366,8 @@ int main(int argc, char **argv)
 
   doServerWork();
 
+  logInfo("N2KD stopping\n");
+  fflush(stdout);
+  fflush(stderr);
   exit(0);
 }

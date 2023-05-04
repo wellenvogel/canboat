@@ -1,37 +1,44 @@
 /*
 
-(C) 2009-2015, Kees Verruijt, Harlingen, The Netherlands.
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
 
 This file is part of CANboat.
 
-CANboat is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-CANboat is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU General Public License
-along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 */
 
 #include "common.h"
+
+StringBuffer sbNew;
 
 static const char *logLevels[] = {"FATAL", "ERROR", "INFO", "DEBUG"};
 
 static LogLevel logLevel = LOGLEVEL_INFO;
 
 static char *progName;
+static char  fixedTimestamp[DATE_LENGTH];
 
 #ifndef WIN32
 
 uint64_t getNow(void)
 {
   struct timeval tv;
+
+  if (*fixedTimestamp != '\0')
+  {
+    return UINT64_C(1672527600000); // 2023-01-01 00:00
+  }
 
   if (gettimeofday(&tv, (void *) 0) == 0)
   {
@@ -62,6 +69,11 @@ const char *now(char str[DATE_LENGTH])
 {
   uint64_t now = getNow();
 
+  if (fixedTimestamp[0] != '\0')
+  {
+    return (const char *) fixedTimestamp;
+  }
+
   storeTimestamp(str, now);
   return (const char *) str;
 }
@@ -73,6 +85,11 @@ const char *now(char str[DATE_LENGTH])
   struct _timeb timebuffer;
   struct tm     tm;
   size_t        len;
+
+  if (fixedTimestamp[0] != '\0')
+  {
+    return (const char *) fixedTimestamp;
+  }
 
   _ftime_s(&timebuffer);
   gmtime_s(&tm, &timebuffer.time);
@@ -142,6 +159,8 @@ void logAbort(const char *format, ...)
 
   logBase(LOGLEVEL_FATAL, format, ap);
   va_end(ap);
+  fflush(stderr);
+  fflush(stdout);
   exit(2);
 }
 
@@ -191,6 +210,12 @@ void setProgName(char *name)
   {
     progName++;
   }
+}
+
+void setFixedTimestamp(char *fixedStr)
+{
+  strncpy(fixedTimestamp, fixedStr, sizeof(fixedTimestamp) - 1);
+  logInfo("Timestamp fixed\n");
 }
 
 static void sbReserve(StringBuffer *const sb, size_t len)
@@ -278,6 +303,28 @@ void sbAppendEncodeHex(StringBuffer *sb, const void *data, size_t len, char sepa
   }
 }
 
+void sbAppendDecodeHex(StringBuffer *sb, const char *data, size_t len)
+{
+  uint8_t  nibble1;
+  uint8_t  nibble2;
+  uint8_t *d;
+
+  sbEnsureCapacity(sb, len / 2 + 1 + sbGetLength(sb));
+  d = (uint8_t *) sbGet(sb) + sbGetLength(sb);
+
+  while (len >= 2)
+  {
+    nibble1 = (*data >= 'a') ? (*data - 'a' + 10) : (*data >= 'A' ? (*data - 'A' + 10) : (*data - '0'));
+    data++;
+    nibble2 = (*data >= 'a') ? (*data - 'a' + 10) : (*data >= 'A' ? (*data - 'A' + 10) : (*data - '0'));
+    data++;
+    *d++ = nibble1 << 4 | nibble2;
+    len -= 2;
+  }
+
+  sb->len = d - (uint8_t *) sbGet(sb);
+}
+
 void sbAppendString(StringBuffer *sb, const char *string)
 {
   size_t len = strlen(string);
@@ -339,7 +386,7 @@ void sbAppendFormat(StringBuffer *const sb, const char *const format, ...)
 /*
  * Retrieve a value out of a JSON styled message.
  */
-int getJSONValue(const char *message, const char *fieldName, char *value, size_t len)
+bool getJSONValue(const char *message, const char *fieldName, char *value, size_t len)
 {
   const char *loc      = message + 1;
   size_t      fieldLen = strlen(fieldName);
@@ -349,7 +396,7 @@ int getJSONValue(const char *message, const char *fieldName, char *value, size_t
     loc = strstr(loc, fieldName);
     if (!loc)
     {
-      return 0;
+      return false;
     }
     if (loc[-1] == '"' && loc[fieldLen] == '"' && loc[fieldLen + 1] == ':')
     {
@@ -366,6 +413,11 @@ int getJSONValue(const char *message, const char *fieldName, char *value, size_t
     loc++;
   }
 
+  if (strncmp(loc, "null", 4) == 0)
+  {
+    return false;
+  }
+
   if (*loc != '"')
   {
     while ((isdigit(*loc) || *loc == '.' || *loc == '-' || *loc == 'E' || *loc == 'e' || *loc == '+') && len > 1)
@@ -374,7 +426,7 @@ int getJSONValue(const char *message, const char *fieldName, char *value, size_t
       len--;
     }
     *value = 0;
-    return 1;
+    return true;
   }
 
   /* field is string */
@@ -408,8 +460,7 @@ int getJSONValue(const char *message, const char *fieldName, char *value, size_t
           *value++ = '\t';
           loc++;
           break;
-        case 'u':
-        {
+        case 'u': {
           unsigned int n;
           sscanf(loc, "%4x", &n);
           loc += 4;
@@ -432,12 +483,98 @@ int getJSONValue(const char *message, const char *fieldName, char *value, size_t
     len--;
   }
   *value = 0;
-  return 1;
+  return true;
+}
+
+/*
+ * Retrieve a lookup list in a JSON styled message.
+ * Example: {"value":0,"name":"Under way using engine"}
+ */
+static bool getJSONLookupList(const char *message, const char *fieldName, char *value, size_t len)
+{
+  const char *loc      = message + 1;
+  size_t      fieldLen = strlen(fieldName);
+  const char *end;
+
+  for (;;)
+  {
+    loc = strstr(loc, fieldName);
+    if (!loc)
+    {
+      return false;
+    }
+    if (loc[-1] == '"' && loc[fieldLen] == '"' && loc[fieldLen + 1] == ':')
+    {
+      break;
+    }
+    loc += fieldLen;
+  }
+
+  /* field has been found */
+  loc += fieldLen + 2;
+
+  while (isspace(*loc))
+  {
+    loc++;
+  }
+
+  if (strncmp(loc, "null", 4) == 0)
+  {
+    return false;
+  }
+
+  end = strchr(loc, '}');
+
+  if (*loc != '{' || end == NULL)
+  {
+    logError("Cannot extract lookup for field '%s': it is not a -nv style lookup\n%s\n", fieldName, loc);
+    return false;
+  }
+  end++;
+  len--;
+  if (end - loc < len)
+  {
+    len = end - loc;
+  }
+  memcpy(value, loc, len);
+  value[len] = '\0';
+
+  return true;
+}
+
+/*
+ * Retrieve a name out of a lookup list in a JSON styled message.
+ * Example: {"value":0,"name":"Under way using engine"} -> Under way using engine
+ */
+bool getJSONLookupName(const char *message, const char *fieldName, char *value, size_t len)
+{
+  char buffer[128];
+
+  if (getJSONLookupList(message, fieldName, buffer, sizeof(buffer)))
+  {
+    return getJSONValue(buffer, "name", value, len);
+  }
+  return false;
+}
+
+/*
+ * Retrieve a value out of a JSON styled message.
+ */
+bool getJSONLookupValue(const char *message, const char *fieldName, int64_t *value)
+{
+  char buffer[128];
+
+  if (getJSONLookupList(message, fieldName, buffer, sizeof(buffer)) && getJSONValue(buffer, "value", buffer, sizeof(buffer))
+      && sscanf(buffer, "%" PRId64, value) == 1)
+  {
+    return true;
+  }
+  return false;
 }
 
 char *sbSearchChar(const StringBuffer *const in, char c)
 {
-  char * p = sbGet(in);
+  char  *p = sbGet(in);
   size_t i;
 
   for (i = 0; i < in->len; i++)
@@ -503,13 +640,16 @@ r# - CAN Reserved Bit #n PS# - ISO 11783 PDU Specific Bit #n
 DLC# - Data Length Code Bit #n *CAN Defined Bit, Unchanged in ISO 11783
 (d) - dominant bit 1 Required format of proprietary 11 bit identifiers
 (r) - recessive bit
+
+For NMEA2000 the R bit is always 0, but SAE J1939 it is not. J1939 calls
+this the "Extended Data Page" (EDP).
 */
 
 void getISO11783BitsFromCanId(unsigned int id, unsigned int *prio, unsigned int *pgn, unsigned int *src, unsigned int *dst)
 {
-  unsigned char PF = (unsigned char) (id >> 16);
-  unsigned char PS = (unsigned char) (id >> 8);
-  unsigned char DP = (unsigned char) (id >> 24) & 1;
+  unsigned char PF  = (unsigned char) (id >> 16);
+  unsigned char PS  = (unsigned char) (id >> 8);
+  unsigned char RDP = (unsigned char) (id >> 24) & 3; // Use R + DP bits
 
   if (src)
   {
@@ -529,7 +669,7 @@ void getISO11783BitsFromCanId(unsigned int id, unsigned int *prio, unsigned int 
     }
     if (pgn)
     {
-      *pgn = (DP << 16) + (PF << 8);
+      *pgn = (RDP << 16) + (PF << 8);
     }
   }
   else
@@ -541,7 +681,7 @@ void getISO11783BitsFromCanId(unsigned int id, unsigned int *prio, unsigned int 
     }
     if (pgn)
     {
-      *pgn = (DP << 16) + (PF << 8) + PS;
+      *pgn = (RDP << 16) + (PF << 8) + PS;
     }
   }
 }
@@ -619,8 +759,8 @@ SOCKET open_socket_stream(const char *url)
   int             sockfd = INVALID_SOCKET;
   int             n;
   struct addrinfo hints, *res, *addr;
-  char *          host;
-  const char *    service;
+  char           *host;
+  const char     *service;
 
   resolve_address(url, &host, &service);
 
@@ -829,66 +969,5 @@ bool parseConst(const char **msg, const char *str)
     *msg += strlen(str);
     return true;
   }
-  return false;
-}
-
-bool parseFastFormat(StringBuffer *in, RawMessage *msg)
-{
-  unsigned int prio;
-  unsigned int pgn;
-  unsigned int src;
-  unsigned int dst;
-  unsigned int bytes;
-
-  char *       p;
-  int          i;
-  int          b;
-  unsigned int byt;
-  int          r;
-
-  p = strchr(sbGet(in), '\n');
-  if (!p)
-  {
-    return false;
-  }
-
-  // Skip the timestamp
-  p = strchr(sbGet(in), ',');
-  if (!p)
-  {
-    return false;
-  }
-
-  r = sscanf(p, ",%u,%u,%u,%u,%u,%n", &prio, &pgn, &src, &dst, &bytes, &i);
-  if (r == 5)
-  {
-    // now store the timestamp, unchanged
-    memset(msg->timestamp, 0, sizeof msg->timestamp);
-    memcpy(msg->timestamp, sbGet(in), CB_MAX(p - sbGet(in), sizeof msg->timestamp - 1));
-
-    msg->prio = prio;
-    msg->pgn  = pgn;
-    msg->src  = src;
-    msg->dst  = dst;
-    msg->len  = bytes;
-
-    p += i - 1;
-
-    for (b = 0; b < CB_MIN(bytes, FASTPACKET_MAX_SIZE); b++)
-    {
-      if ((sscanf(p, ",%x%n", &byt, &i) == 1) && (byt < 256))
-      {
-        msg->data[b] = byt;
-      }
-      else
-      {
-        logError("Unable to parse incoming message '%s' data byte %u\n", sbGet(in), b);
-        return false;
-      }
-      p += i;
-    }
-    return true;
-  }
-  logError("Unable to parse incoming message '%s', r = %d\n", sbGet(in), r);
   return false;
 }

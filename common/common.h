@@ -1,25 +1,25 @@
 /*
 
-(C) 2009-2015, Kees Verruijt, Harlingen, The Netherlands.
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
 
 This file is part of CANboat.
 
-CANboat is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-CANboat is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU General Public License
-along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 */
 
-#ifndef CANBOAT_COMMON
+#ifndef COMMON_H_INCLUDED
+#define COMMON_H_INCLUDED
 
 #include "license.h"
 
@@ -30,6 +30,7 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +57,26 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 typedef int SOCKET;
 #else
 #include <winsock2.h>
+
 #include "winport.h"
+#endif
+
+#ifdef WIN32
+typedef unsigned char      uint8_t;
+typedef unsigned short int uint16_t;
+typedef unsigned int       uint32_t;
+typedef signed int         int32_t;
+typedef __int64            int64_t;
+typedef unsigned __int64   uint64_t;
+#define UINT64_C(x) ((uint64_t) (x))
+#define INT64_C(x) ((int64_t) (x))
+#define PRId64 "I64d"
+#define PRIu64 "I64u"
+#define PRIx64 "I64x"
+#define PRIX64 "I64X"
+#define strcasecmp _stricmp
+#define UINT16_MAX (0xffff)
+#define UINT32_MAX (0xffffffff)
 #endif
 
 #ifndef CB_MAX
@@ -68,6 +88,7 @@ typedef int SOCKET;
 #endif
 
 #define STRSIZE(x) (sizeof(x) - 1)
+#define STRNULL(x) ((x != NULL) ? (x) : "NULL")
 
 #ifndef INVALID_SOCKET
 #define INVALID_SOCKET (-1)
@@ -93,10 +114,11 @@ void die(const char *t);
 void setLogLevel(LogLevel level);
 bool isLogLevelEnabled(LogLevel level);
 void setProgName(char *name);
+void setFixedTimestamp(char *fixedStr);
 
 typedef struct StringBuffer
 {
-  char * data;
+  char  *data;
   size_t len;
   size_t alloc;
 } StringBuffer;
@@ -107,10 +129,11 @@ enum Base64Encoding
   BASE64_AIS
 };
 
-StringBuffer sbNew;
+extern StringBuffer sbNew;
 
 void  sbAppendEncodeHex(StringBuffer *sb, const void *data, size_t len, char separator);                     // binary to hex
 void  sbAppendEncodeBase64(StringBuffer *sb, const uint8_t *data, size_t len, enum Base64Encoding encoding); // binary to Base64
+void  sbAppendDecodeHex(StringBuffer *sb, const char *data, size_t len);                                     // hex to binary
 void  sbAppendDecodeBase64(StringBuffer *sb, const char *data, size_t len, enum Base64Encoding encoding);    // base64 to binary
 void  sbAppendData(StringBuffer *sb, const void *data, size_t len);
 void  sbAppendString(StringBuffer *sb, const char *string);
@@ -149,7 +172,9 @@ char *sbSearchChar(const StringBuffer *const sb, char c);
     (sb)->len   = 0;    \
   }
 
-int          getJSONValue(const char *message, const char *fieldName, char *value, size_t len);
+bool         getJSONValue(const char *message, const char *fieldName, char *value, size_t len);
+bool         getJSONLookupValue(const char *message, const char *fieldName, int64_t *value);
+bool         getJSONLookupName(const char *message, const char *fieldName, char *value, size_t len);
 void         getISO11783BitsFromCanId(unsigned int id, unsigned int *prio, unsigned int *pgn, unsigned int *src, unsigned int *dst);
 unsigned int getCanIdFromISO11783Bits(unsigned int prio, unsigned int pgn, unsigned int src, unsigned int dst);
 
@@ -158,7 +183,7 @@ SOCKET open_socket_stream(const char *url);
 #define DATE_LENGTH 60
 const char *now(char str[DATE_LENGTH]);
 uint64_t    getNow(void);
-void        storeTimestamp(char *buf, uint64_t when);
+void        storeTimestamp(char str[DATE_LENGTH], uint64_t when);
 
 uint8_t scanNibble(char c);
 int     scanHex(char **p, uint8_t *m);
@@ -184,6 +209,10 @@ int writeSerial(int handle, const uint8_t *data, size_t len);
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
 
+// C stringify operations with macro names
+#define xstr(s) str(s)
+#define str(s) #s
+
 /*
  * Notes on the NMEA 2000 packet structure
  * ---------------------------------------
@@ -207,7 +236,7 @@ int writeSerial(int handle, const uint8_t *data, size_t len);
  */
 
 /*
- * NMEA 2000 uses the 8 'data' bytes as follows:
+ * NMEA 2000 uses the 8 'data' bytes for fast framed PGNs as follows:
  * data[0] is an 'order' that increments, or not (depending a bit on implementation).
  * If the size of the packet <= 7 then the data follows in data[1..7]
  * If the size of the packet > 7 then the next byte data[1] is the size of the payload
@@ -225,27 +254,26 @@ int writeSerial(int handle, const uint8_t *data, size_t len);
 #define FASTPACKET_BUCKET_0_OFFSET (2)
 #define FASTPACKET_BUCKET_N_OFFSET (1)
 #define FASTPACKET_MAX_INDEX (0x1f)
-#define FASTPACKET_MAX_SIZE (FASTPACKET_BUCKET_0_SIZE + FASTPACKET_BUCKET_N_SIZE * (FASTPACKET_MAX_INDEX - 1))
+#define FASTPACKET_MAX_SIZE (FASTPACKET_BUCKET_0_SIZE + FASTPACKET_BUCKET_N_SIZE * FASTPACKET_MAX_INDEX)
 
-typedef struct
-{
-  char     timestamp[DATE_LENGTH];
-  uint8_t  prio;
-  uint32_t pgn;
-  uint8_t  dst;
-  uint8_t  src;
-  uint8_t  len;
-  uint8_t  data[FASTPACKET_MAX_SIZE];
-} RawMessage;
+#define IS_PGN_PROPRIETARY(n)                                                   \
+  (((n) >= 0xEF00 && (n) <= 0xEFFF)      /* PDU1 (addressed) single-frame */    \
+   || ((n) >= 0xFF00 && (n) <= 0xFFFF)   /* PDU2 (nonaddressed) single-frame */ \
+   || ((n) >= 0x1EF00 && (n) <= 0x1EFFF) /* PDU1 (addressed) fast-packet */     \
+   || ((n) >= 0x1FF00 && (n) <= 0x1FFFF) /* PDU2 (nonaddressed) fast-packet */  \
+  )
 
-bool parseFastFormat(StringBuffer *src, RawMessage *msg);
+#define ALLOW_PGN_FAST_PACKET(n) (((n) >= 0x10000 && (n) < 0x1FFFF) || (n) >= CANBOAT_PGN_START)
+#define ALLOW_PGN_SINGLE_FRAME(n) ((n) < 0x10000 || (n) >= 0x1F000)
 
-bool parseInt(const char **msg, int *value, int defValue);
-bool parseConst(const char **msg, const char *str);
+#define MAP_PGN_TO_CONTINUOUS_RANGE(n) ((n) - (0xE800))
+#define PGN_MAX_CONTINUOUS_RANGE (MAP_PGN_TO_CONTINUOUS_RANGE(0x20000))
 
 #define Pi (3.141592654)
 #define RadianToDegree (360.0 / 2 / Pi)
+#define BITS(x) (x)
 #define BYTES(x) ((x) * (8))
+#define BITS_TO_BYTES(x) ((x) >> 3)
 
 int  logInfo(const char *format, ...);
 int  logDebug(const char *format, ...);
@@ -262,5 +290,4 @@ void logAbort(const char *format, ...);
 #define ACTISENSE_BEM 0x40000 /* Actisense specific fake PGNs */
 #define IKONVERT_BEM 0x40100  /* iKonvert specific fake PGNs */
 
-#define CANBOAT_COMMON
 #endif

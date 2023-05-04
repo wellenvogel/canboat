@@ -3,26 +3,23 @@ Read and write to an Actisense NGT-1 over its serial device.
 This can be a serial version connected to an actual serial port
 or an USB version connected to the virtual serial port.
 
-(C) 2009-2015, Kees Verruijt, Harlingen, The Netherlands.
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
 
 This file is part of CANboat.
 
-CANboat is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-CANboat is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU General Public License
-along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 */
-
-#include "common.h"
 
 #include <fcntl.h>
 #include <math.h>
@@ -39,7 +36,7 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 #include <unistd.h>
 
 #include "actisense.h"
-
+#include "common.h"
 #include "license.h"
 
 /* The following startup command reverse engineered from Actisense NMEAreader.
@@ -54,7 +51,6 @@ static unsigned char NGT_STARTUP_SEQ[] = {
 
 #define BUFFER_SIZE 900
 
-static int  debug          = 0;
 static int  verbose        = 0;
 static int  readonly       = 0;
 static int  writeonly      = 0;
@@ -75,7 +71,6 @@ int baudRate = B115200;
 static bool readIn(void);
 static bool getInMsg(unsigned char *msg, size_t len);
 static void parseAndWriteIn(int handle, const unsigned char *cmd);
-static void writeRaw(int handle, const unsigned char *cmd, const size_t len);
 static void writeMessage(int handle, unsigned char command, const unsigned char *cmd, const size_t len);
 static bool readNGT1Byte(unsigned char c);
 static int  readNGT1(int handle);
@@ -85,14 +80,12 @@ static void ngtMessageReceived(const unsigned char *msg, size_t msgLen);
 
 int main(int argc, char **argv)
 {
-  int            r;
   int            handle;
   struct termios attr;
   char *         name   = argv[0];
   char *         device = 0;
   struct stat    statbuf;
-  int            pid = 0;
-  int            speed;
+  int            speed = 115200;
   int            i;
   int            wait;
   time_t         lastPing = time(0);
@@ -217,7 +210,6 @@ int main(int argc, char **argv)
     exit(1);
   }
 
-retry:
   logDebug("Opening %s\n", device);
   if (strncmp(device, "tcp:", STRSIZE("tcp:")) == 0)
   {
@@ -275,9 +267,7 @@ retry:
   // Do not read anything until we have seen 10 messages on bus
   for (i = 0; i < 10;)
   {
-    unsigned char msg[BUFFER_SIZE];
-    size_t        msgLen;
-    int           r = isReady(handle, INVALID_SOCKET, INVALID_SOCKET, 1);
+    int r = isReady(handle, INVALID_SOCKET, INVALID_SOCKET, timeout);
 
     if ((r & FD1_ReadReady) > 0)
     {
@@ -289,11 +279,10 @@ retry:
     }
   }
 
-  for (wait = 1;;)
+  for (wait = timeout;;)
   {
     unsigned char msg[BUFFER_SIZE];
-    size_t        msgLen;
-    int           r = isReady(writeonly ? INVALID_SOCKET : handle, readonly ? INVALID_SOCKET : STDIN_FILENO, INVALID_SOCKET, wait);
+    int           r = isReady(writeonly ? INVALID_SOCKET : handle, readonly ? INVALID_SOCKET : STDIN_FILENO, INVALID_SOCKET, timeout);
 
     if ((r & FD1_ReadReady) > 0)
     {
@@ -325,7 +314,7 @@ retry:
     }
     else
     {
-      wait = 1;
+      wait = timeout;
       if (writeonly)
       {
         break;
@@ -413,15 +402,6 @@ static void parseAndWriteIn(int handle, const unsigned char *cmd)
   writeMessage(handle, N2K_MSG_SEND, msg, m - msg);
 }
 
-static void writeRaw(int handle, const unsigned char *cmd, const size_t len)
-{
-  if (write(handle, cmd, len) != len)
-  {
-    logAbort("Unable to write command '%.*s' to NGT-1-A device\n", (int) len, cmd);
-  }
-  logDebug("Written %d bytes\n", (int) len);
-}
-
 /*
  * Wrap the PGN or NGT message and send to NGT
  */
@@ -434,11 +414,11 @@ static void writeMessage(int handle, unsigned char command, const unsigned char 
 
   int i;
 
-  *b++   = DLE;
-  *b++   = STX;
-  *b++   = command;
-  crc    = command;
-  *b++   = len;
+  *b++ = DLE;
+  *b++ = STX;
+  *b++ = command;
+  crc  = command;
+  *b++ = len;
   if (len == DLE)
   {
     *b++ = DLE;
@@ -552,9 +532,8 @@ static bool getInMsg(unsigned char *msg, size_t msgLen)
 
 static bool readNGT1Byte(unsigned char c)
 {
-  static enum MSG_State state       = MSG_START;
-  static bool           startEscape = false;
-  static bool           noEscape    = false;
+  static enum MSG_State state    = MSG_START;
+  static bool           noEscape = false;
   static unsigned char  buf[500];
   static unsigned char *head = buf;
 
@@ -620,7 +599,6 @@ static int readNGT1(int handle)
 {
   size_t        i;
   ssize_t       r;
-  bool          printed = 0;
   unsigned char c;
   unsigned char buf[500];
   bool          finish;
@@ -661,11 +639,10 @@ static int readNGT1(int handle)
 
 static void messageReceived(const unsigned char *msg, size_t msgLen)
 {
-  unsigned char  command;
-  unsigned char  checksum = 0;
-  unsigned char *payload;
-  unsigned char  payloadLen;
-  size_t         i;
+  unsigned char command;
+  unsigned char checksum = 0;
+  unsigned char payloadLen;
+  size_t        i;
 
   if (msgLen < 3)
   {
@@ -729,9 +706,7 @@ static void n2kMessageReceived(const unsigned char *msg, size_t msgLen)
   unsigned int prio, src, dst;
   unsigned int pgn;
   size_t       i;
-  unsigned int id;
   unsigned int len;
-  unsigned int data[8];
   char         line[800];
   char *       p;
   char         dateStr[DATE_LENGTH];

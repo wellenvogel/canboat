@@ -3,26 +3,23 @@ Read and write to a Digital Yacht iKonvert over its serial device.
 This can be a serial version connected to an actual serial port
 or an USB version connected to the virtual serial port.
 
-(C) 2009-2018, Kees Verruijt, Harlingen, The Netherlands.
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
 
 This file is part of CANboat.
 
-CANboat is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-CANboat is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU General Public License
-along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 */
-
-#include "common.h"
 
 #include <fcntl.h>
 #include <math.h>
@@ -37,9 +34,10 @@ along with CANboat.  If not, see <http://www.gnu.org/licenses/>.
 #include <time.h>
 #include <unistd.h>
 
+#include "common.h"
 #include "ikonvert.h"
-
 #include "license.h"
+#include "parse.h"
 
 #define SEND_ALL_INIT_MESSAGES (14)
 
@@ -49,8 +47,10 @@ static bool writeonly;
 static bool passthru;
 static bool rate_limit_off;
 static long timeout;
+static long resetTimeout;
 static bool isFile;
 static bool isSerialDevice;
+static bool hexMode;
 static int  sendInitState;
 static int  sequentialStatusMessages;
 
@@ -74,13 +74,11 @@ static void initializeDevice(void);
 
 int main(int argc, char **argv)
 {
-  int            r;
   int            handle;
   struct termios attr;
-  char *         name   = argv[0];
-  char *         device = 0;
+  char          *name   = argv[0];
+  char          *device = 0;
   struct stat    statbuf;
-  int            pid = 0;
 
   setProgName(argv[0]);
   while (argc > 1)
@@ -106,8 +104,11 @@ int main(int argc, char **argv)
     {
       verbose = true;
     }
-    else if (strcasecmp(argv[1], "--rate-limit-off") == 0
-          || strcasecmp(argv[1], "-l") == 0)
+    else if (strcasecmp(argv[1], "-x") == 0)
+    {
+      hexMode = true;
+    }
+    else if (strcasecmp(argv[1], "--rate-limit-off") == 0 || strcasecmp(argv[1], "-l") == 0)
     {
       rate_limit_off = true;
     }
@@ -137,6 +138,13 @@ int main(int argc, char **argv)
       argv++;
       timeout = strtol(argv[1], 0, 10);
       logDebug("timeout set to %ld seconds\n", timeout);
+    }
+    else if (strcasecmp(argv[1], "-reset") == 0 && argc > 2)
+    {
+      argc--;
+      argv++;
+      resetTimeout = strtol(argv[1], 0, 10);
+      logDebug("reset timeout set to %ld seconds\n", resetTimeout);
     }
     else if (strcasecmp(argv[1], "-s") == 0 && argc > 2)
     {
@@ -213,6 +221,7 @@ int main(int argc, char **argv)
 #endif
             " (default 230400)\n"
             "  -t <n>                timeout, if no message is received after <n> seconds the program quits\n"
+            "  -x                    hex instead of base64 mode"
             "  <device> can be a serial device, a normal file containing a raw log,\n"
             "  or the address of a TCP server in the format tcp://<host>[:<port>]\n"
             "\n"
@@ -225,7 +234,6 @@ int main(int argc, char **argv)
     exit(1);
   }
 
-retry:
   logDebug("Opening %s\n", device);
   if (strncmp(device, "tcp:", STRSIZE("tcp:")) == 0)
   {
@@ -281,7 +289,6 @@ retry:
   for (;;)
   {
     uint8_t data[128];
-    size_t  len;
     ssize_t r;
     int     writeHandle = (sbGetLength(&writeBuffer) > 0) ? handle : INVALID_SOCKET;
     int     inHandle    = (sendInitState == 0 && writeHandle == INVALID_SOCKET) ? STDIN : INVALID_SOCKET;
@@ -303,7 +310,7 @@ retry:
       }
       if (r == 0)
       {
-        logAbort("EOF on device");
+        logAbort("EOF on device\n");
       }
     }
 
@@ -321,7 +328,7 @@ retry:
       }
       if (r == 0)
       {
-        logAbort("EOF on stdin");
+        logAbort("EOF on stdin\n");
       }
     }
 
@@ -338,7 +345,7 @@ retry:
       }
       if (r == 0)
       {
-        logAbort("EOF on stdout");
+        logAbort("EOF on stdout\n");
       }
     }
 
@@ -348,10 +355,25 @@ retry:
       processReadBuffer(&readBuffer, STDOUT);
     }
 
-    if (rd == 0)
+    // The isReady() function already aborted the program
+    // where nothing at all was received from the iKonvert, for instance
+    // when there is no N2K bus power.
+    // However, we may also want reinitialize when there was no actual data
+    // received from the iKonvert, e.g. no PGN was received. A reset of the
+    // iKonvert is enough for that, so initializeDevices() suffices.
+    if (sendInitState == 0 && resetTimeout > 0)
     {
-      logDebug("Timeout\n");
-      initializeDevice();
+      uint64_t now = getNow();
+
+      if (lastNow == 0)
+      {
+        lastNow = now;
+      }
+      if (lastNow < now - 1000 * resetTimeout)
+      {
+        lastNow = now;
+        initializeDevice();
+      }
     }
   }
 
@@ -365,7 +387,7 @@ retry:
 static void processInBuffer(StringBuffer *in, StringBuffer *out)
 {
   RawMessage msg;
-  char *     p;
+  char      *p;
 
   while ((p = strchr(sbGet(in), '\n')) != 0)
   {
@@ -373,7 +395,20 @@ static void processInBuffer(StringBuffer *in, StringBuffer *out)
     {
       // Format msg as iKonvert message
       sbAppendFormat(out, TX_PGN_MSG_PREFIX, msg.pgn, msg.dst);
-      sbAppendEncodeBase64(out, msg.data, msg.len, 0);
+      if (hexMode)
+      {
+        sbAppendEncodeHex(out, msg.data, msg.len, 0);
+      }
+      else
+      {
+        sbAppendEncodeBase64(out, msg.data, msg.len, 0);
+      }
+      sbAppendFormat(out, "\r\n");
+      logDebug("SendBuffer [%s]\n", sbGet(out));
+    }
+    else if (!readonly && msg.len > sizeof("$PDGY") && memcmp(msg.data, "$PDGY", sizeof("$PDGY")) == 0)
+    {
+      sbAppendData(out, msg.data, msg.len);
       sbAppendFormat(out, "\r\n");
       logDebug("SendBuffer [%s]\n", sbGet(out));
     }
@@ -422,8 +457,8 @@ static void computeIKonvertTime(RawMessage *msg, unsigned int t1, unsigned int t
 
 static bool parseIKonvertFormat(StringBuffer *in, RawMessage *msg)
 {
-  char *       end = sbGet(in) + strlen(sbGet(in)); // not sbGetLength as 'in' has been truncated
-  char *       p   = sbGet(in);
+  char        *end = sbGet(in) + strlen(sbGet(in)); // not sbGetLength as 'in' has been truncated
+  char        *p   = sbGet(in);
   int          r;
   unsigned int pgn;
   unsigned int prio;
@@ -445,7 +480,14 @@ static bool parseIKonvertFormat(StringBuffer *in, RawMessage *msg)
   msg->dst  = dst;
 
   p += i;
-  sbAppendDecodeBase64(&dataBuffer, p, end - p, BASE64_RFC);
+  if (hexMode)
+  {
+    sbAppendDecodeHex(&dataBuffer, p, end - p);
+  }
+  else
+  {
+    sbAppendDecodeBase64(&dataBuffer, p, end - p, BASE64_RFC);
+  }
   msg->len = CB_MIN(sbGetLength(&dataBuffer), FASTPACKET_MAX_SIZE);
   memcpy(msg->data, sbGet(&dataBuffer), msg->len);
   sbEmpty(&dataBuffer);
@@ -556,6 +598,12 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
     }
     return true;
   }
+  if (sendInitState == 13)
+  {
+    sendInitState++;
+    // Send message again on next loop
+    return true;
+  }
 
   if (parseConst(&msg, RX_SHOW_RX_LIST_MSG))
   {
@@ -621,8 +669,7 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
     n2k->dst  = 255;
     storeTimestamp(n2k->timestamp, getNow());
 
-    int    load, errors, count, uptime, addr, rejected;
-    size_t off;
+    int load, errors, count, uptime, addr, rejected;
 
     n2k->len = 15;
     memset(n2k->data, 0xff, n2k->len);
@@ -637,10 +684,10 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
     }
     if (parseInt(&msg, &errors, -1))
     {
-      n2k->data[1] = (uint8_t)(errors >> 0);
-      n2k->data[2] = (uint8_t)(errors >> 8);
-      n2k->data[3] = (uint8_t)(errors >> 16);
-      n2k->data[4] = (uint8_t)(errors >> 24);
+      n2k->data[1] = (uint8_t) (errors >> 0);
+      n2k->data[2] = (uint8_t) (errors >> 8);
+      n2k->data[3] = (uint8_t) (errors >> 16);
+      n2k->data[4] = (uint8_t) (errors >> 24);
       if (verbose)
       {
         logInfo("CAN Bus errors %d\n", errors);
@@ -656,10 +703,10 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
     }
     if (parseInt(&msg, &uptime, 0) && uptime != 0)
     {
-      n2k->data[6] = (uint8_t)(uptime >> 0);
-      n2k->data[7] = (uint8_t)(uptime >> 8);
-      n2k->data[8] = (uint8_t)(uptime >> 16);
-      n2k->data[9] = (uint8_t)(uptime >> 24);
+      n2k->data[6] = (uint8_t) (uptime >> 0);
+      n2k->data[7] = (uint8_t) (uptime >> 8);
+      n2k->data[8] = (uint8_t) (uptime >> 16);
+      n2k->data[9] = (uint8_t) (uptime >> 24);
       if (verbose)
       {
         logInfo("iKonvert uptime %ds\n", uptime);
@@ -675,10 +722,10 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
     }
     if (parseInt(&msg, &rejected, 0) && rejected != 0)
     {
-      n2k->data[11] = (uint8_t)(rejected >> 0);
-      n2k->data[12] = (uint8_t)(rejected >> 8);
-      n2k->data[13] = (uint8_t)(rejected >> 16);
-      n2k->data[14] = (uint8_t)(rejected >> 24);
+      n2k->data[11] = (uint8_t) (rejected >> 0);
+      n2k->data[12] = (uint8_t) (rejected >> 8);
+      n2k->data[13] = (uint8_t) (rejected >> 16);
+      n2k->data[14] = (uint8_t) (rejected >> 24);
       if (verbose)
       {
         logInfo("iKonvert rejected %d TX message requests\n", rejected);
@@ -699,7 +746,7 @@ static bool parseIKonvertAsciiMessage(const char *msg, RawMessage *n2k)
 static void processReadBuffer(StringBuffer *in, int out)
 {
   RawMessage  msg;
-  char *      p;
+  char       *p;
   const char *w;
   bool        allowInit = true;
 

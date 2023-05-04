@@ -1,5 +1,21 @@
 /*
- * Defines to interface with a Digital Yacht iKonvert
+ Defines to interface with a Digital Yacht iKonvert
+
+(C) 2009-2023, Kees Verruijt, Harlingen, The Netherlands.
+
+This file is part of CANboat.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
  */
 
 #define IKONVERT_ASCII_PREFIX "$PDGY,"
@@ -21,6 +37,7 @@
 #define TX_SHOWLISTS_MSG IKONVERT_ASCII_PREFIX "SHOW_LISTS"           // Show RX and TX lists
 #define TX_SETUP_MSG IKONVERT_ASCII_PREFIX "N2NET_SETUP,%u,%u,%u,%u,," // Instance, Address, Baud, Checksum (A/V/nil)
 #define TX_LIMIT_OFF IKONVERT_ASCII_PREFIX "TX_LIMIT,OFF"              // No TX limit, use at own risk
+#define TX_GETNAMES_MSG IKONVERT_ASCII_PREFIX "GET_N2NET_NAME"         // Show all N2K devices
 #define RX_NAK_MSG "NAK,"                                              // Error # followed by string
 #define RX_ACK_MSG "ACK,"                                              // Acknowledgement of command
 #define RX_TEXT_MSG "TEXT,"                                            // Status text
