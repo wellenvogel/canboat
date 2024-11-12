@@ -8,9 +8,93 @@ Sections can be: Added Changed Deprecated Removed Fixed Security.
 
 ## [Unreleased]
 
+### Fixed
+
+## [5.1.1]
+
+- #451: candump2analyzer format 3 does not handle CRLF line endings correctly.
+
+## [5.1.0] 
+
+### Fixed
+
+- #439: Improve PGN 65379 Raymarine 
+- #442: Fix PGN 129799 Radio Frequency/Mode/Power field lengths and types.
+- #423: Add support for Garmin Backlight level + day/night mode.
+- #428: PGN 127509 is FAST, not SINGLE.
+- #436: Fix length of field in PGN 65379 (Seatalk Pilot Mode).
+
 ### Added
 
-- #401: Added four new device function values
+- #444: Add analyzer2csv program and analyzer `-debugdata`.
+- #445: Add default priority to explanations.
+- #448: Add analyzer format `PLAIN_MIX_FAST`.
+- #430: Add J1939 PGNs and `analyzer-j1939` and `analyzer-explain-j1939`.
+
+## [5.0.3]
+
+### Added
+
+- #425: PGN 65293: Diverse Yacht Services: Load Cell
+- Raymarine Seatalk1 Brightness and Color
+
+### Fixed
+
+- ikonvert-serial timestamps are now ignoring time from ikonvert itself.
+
+## [5.0.2]
+
+### Fixed
+
+- Print raw negative times correctly (broken in 5.0.0).
+
+### Added
+
+- #420: Fusion track album ID lookup added
+- Simnet 130845 multi-key/value pair PGN analysis
+
+## [5.0.1]
+
+### Added
+
+- A new 'replay' binary has been added for help on MS Windows without Perl.
+
+## [5.0.0]
+
+Note: Changes to XML v2 (canboat.xml, canboat.xsd, canboat.xsl) so this will
+constitute a new major release. The changes are small, the schema for canboat.xsd
+has been bumped to 2.1. The differences are:
+  - Dynamic field types, where a (repeating) set of fields defines a varying 
+    field, can now have a 'lookup' as well. 
+  - Some fields have changed from signed to unsigned.
+
+To see the changes, use:
+
+    git diff v4.12.0 docs/canboat.xml
+    git diff v4.12.0 docs/canboat.xsd
+
+### Added
+
+- #413: docs: RangeMax for ENTERTAINMENT_PLAY_STATUS_BITFIELD is incorrect
+- #309: Simrad Autopilot work (phase 1)
+- #401, #407: Added 7 new device function values to PGN 65240 and 60928.
+- #398: Add SIMNET_AP_EVENTS codes for B&G H5000 start features
+- Add command to request PGN transmit rate change
+- candump2analyzer: add support for Navico TCP candump
+- n2kd: Add status port to show counts and intervals of received PGNs
+
+### Fixed
+
+- #414: Matched fields should show name, not bare value in explanation.
+- #404: analyzer/canboat.xml: remove useless duplicate values from lookups.
+- #403: analyzer: unsigned fields with offset / PGN 127513 peukert exponent was wrong.
+- #411: analyzer: fix formatted printing of negative time offset values.
+- #410: analyzer: make -raw produce standard raw format.
+- ikonvert-serial: Improve iKonvert reset handling
+- Remove unicode characters from source
+- n2kd: write complete JSON state (use multiple blocking writes if necessary)
+- #408: n2k_monitor: avoid n2kd monitor forking every 30s
+
 
 ## [4.12.0]
 
@@ -600,7 +684,13 @@ iptee:
 
 ## Versions
 
-[Unreleased]: https://github.com/canboat/canboat/compare/v4.12.0...HEAD
+[Unreleased]: https://github.com/canboat/canboat/compare/v5.1.1...HEAD
+[5.1.1]: https://github.com/canboat/canboat/compare/v5.1.0...v5.1.1
+[5.1.0]: https://github.com/canboat/canboat/compare/v5.0.3...v5.1.0
+[5.0.3]: https://github.com/canboat/canboat/compare/v5.0.2...v5.0.3
+[5.0.2]: https://github.com/canboat/canboat/compare/v5.0.1...v5.0.2
+[5.0.1]: https://github.com/canboat/canboat/compare/v5.0.0...v5.0.1
+[5.0.0]: https://github.com/canboat/canboat/compare/v4.12.0...v5.0.0
 [4.12.0]: https://github.com/canboat/canboat/compare/v4.11.1...v4.12.0
 [4.11.1]: https://github.com/canboat/canboat/compare/v4.11.0...v4.11.1
 [4.11.0]: https://github.com/canboat/canboat/compare/v4.10.1...v4.11.0

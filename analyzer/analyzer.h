@@ -60,7 +60,11 @@ limitations under the License.
 #define max(x, y) ((x) >= (y) ? (x) : (y))
 #endif
 
+#ifdef J1939
+#include "pgn-j1939.h"
+#else
 #include "pgn.h"
+#endif
 
 #define DST_GLOBAL (0xff) /* The address used when a message is addressed to -all- stations */
 
@@ -80,17 +84,19 @@ typedef enum GeoFormats
   GEO_DMS
 } GeoFormats;
 
-extern bool       showRaw;
-extern bool       showData;
-extern bool       showJson;
-extern bool       showJsonEmpty;
-extern bool       showJsonValue;
-extern bool       showBytes;
-extern bool       showSI;
-extern GeoFormats showGeo;
-extern char      *sep;
-extern char       closingBraces[16]; // } and ] chars to close sentence in JSON mode, otherwise empty string
-extern bool       g_skip;
+extern bool         showRaw;
+extern bool         showData;
+extern bool         showJson;
+extern bool         showJsonEmpty;
+extern bool         showJsonValue;
+extern bool         showBytes;
+extern bool         showSI;
+extern GeoFormats   showGeo;
+extern char        *sep;
+extern char         closingBraces[16]; // } and ] chars to close sentence in JSON mode, otherwise empty string
+extern bool         g_skip;
+extern const Field *g_ftf;
+extern int64_t      g_length;
 
 /* analyzer.c */
 
@@ -105,4 +111,4 @@ extern void   mset(size_t location);
 extern char   mchr(size_t location);
 extern void   minsert(size_t location, const char *str);
 extern void   printEmpty(const char *name, int64_t exceptionValue);
-extern bool   adjustDataLenStart(uint8_t **data, size_t *dataLen, size_t *startBit);
+extern bool   adjustDataLenStart(const uint8_t **data, size_t *dataLen, size_t *startBit);

@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  build:
+  build-ubuntu:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repo
@@ -22,3 +22,22 @@ jobs:
 
       - name: check there is no git diff output
         run: git diff --exit-code
+
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+        run:
+          shell: C:\tools\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Cygwin
+        uses: egor-tensin/setup-cygwin@v4
+        with:
+            packages: make gcc-core
+            hardlinks: 1
+
+      - name: make
+        run: make -C /cygdrive/d/a/canboat/canboat

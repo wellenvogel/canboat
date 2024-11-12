@@ -31,6 +31,7 @@ enum RawFormats
   RAWFORMAT_PLAIN,
   RAWFORMAT_FAST,
   RAWFORMAT_PLAIN_OR_FAST,
+  RAWFORMAT_PLAIN_MIX_FAST,
   RAWFORMAT_AIRMAR,
   RAWFORMAT_CHETCO,
   RAWFORMAT_GARMIN_CSV1,
@@ -45,6 +46,7 @@ const char *RAW_FORMAT_STR[] = {"UNKNOWN",
                                 "PLAIN",
                                 "FAST",
                                 "PLAIN_OR_FAST",
+                                "PLAIN_MIX_FAST",
                                 "AIRMAR",
                                 "CHETCO",
                                 "GARMIN_CSV1",
@@ -78,6 +80,7 @@ Packet reassemblyBuffer[REASSEMBLY_BUFFER_SIZE];
 bool       showRaw       = false;
 bool       showData      = false;
 bool       showBytes     = false;
+bool       showAllBytes  = false;
 bool       showJson      = false;
 bool       showJsonEmpty = false;
 bool       showJsonValue = false;
@@ -90,6 +93,7 @@ char  closingBraces[16]; // } and ] chars to close sentence in JSON mode, otherw
 
 int    onlyPgn  = 0;
 int    onlySrc  = -1;
+int    onlyDst  = -1;
 int    clockSrc = -1;
 size_t heapSize = 0;
 
@@ -101,16 +105,22 @@ static uint32_t currentTime = UINT32_MAX;
 
 static enum RawFormats detectFormat(const char *msg);
 static void            printCanFormat(RawMessage *msg);
-static bool            printField(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-static void            printCanRaw(RawMessage *msg);
+static bool            printField(const Field   *field,
+                                  const char    *fieldName,
+                                  const uint8_t *data,
+                                  size_t         dataLen,
+                                  size_t         startBit,
+                                  size_t        *bits);
+static void            printCanRaw(const RawMessage *msg);
 static void            showBuffers(void);
+static unsigned int    getMessageByteCount(const char *const msg);
 
 static void usage(char **argv, char **av)
 {
   printf("Unknown or invalid argument %s\n", av[0]);
   printf("Usage: %s [[-raw] [-json [-empty] [-nv] [-camel | -upper-camel]] [-data] [-debug] [-d] [-q] [-si] [-geo {dd|dm|dms}] "
          "-format <fmt> "
-         "[-src <src> | <pgn>]] ["
+         "[-src <src> | -dst <dst> | <pgn>]] ["
 #ifndef SKIP_SETSYSTEMCLOCK
          "-clocksrc <src> | "
 #endif
@@ -138,9 +148,10 @@ static void usage(char **argv, char **av)
   printf("\n");
   printf("     -version          Print the version of the program and quit\n");
   printf("\nThe following options are used to debug the analyzer:\n");
-  printf("     -raw              Print raw bytes (obsolete, use -data)\n");
+  printf("     -raw              Print the PGN in a format suitable to be fed to analyzer again (in standard raw format)\n");
   printf("     -data             Print the PGN three times: in hex, ascii and analyzed\n");
   printf("     -debug            Print raw value per field\n");
+  printf("     -debugdata        Print raw value per pgn\n");
   printf("     -fixtime str      Print str as timestamp in logging\n");
   printf("\n");
   exit(1);
@@ -184,6 +195,11 @@ int main(int argc, char **argv)
     {
       showJsonEmpty = true;
       showBytes     = true;
+    }
+    else if (strcasecmp(av[1], "-debugdata") == 0)
+    {
+      showJsonEmpty = true;
+      showAllBytes  = true;
     }
     else if (strcasecmp(av[1], "-d") == 0)
     {
@@ -256,6 +272,12 @@ int main(int argc, char **argv)
       ac--;
       av++;
     }
+    else if (ac > 2 && strcasecmp(av[1], "-dst") == 0)
+    {
+      onlyDst = strtol(av[2], 0, 10);
+      ac--;
+      av++;
+    }
 #ifndef SKIP_SETSYSTEMCLOCK
     else if (ac > 2 && strcasecmp(av[1], "-clocksrc") == 0)
     {
@@ -281,7 +303,8 @@ int main(int argc, char **argv)
         if (strcasecmp(av[2], RAW_FORMAT_STR[i]) == 0)
         {
           format = (enum RawFormats) i;
-          if (format != RAWFORMAT_PLAIN && format != RAWFORMAT_PLAIN_OR_FAST)
+          if (format != RAWFORMAT_PLAIN && format != RAWFORMAT_PLAIN_OR_FAST && format != RAWFORMAT_PLAIN_MIX_FAST
+              && format != RAWFORMAT_YDWG02)
           {
             multiPackets = MULTIPACKETS_COALESCED;
           }
@@ -356,33 +379,42 @@ int main(int argc, char **argv)
     switch (format)
     {
       case RAWFORMAT_PLAIN_OR_FAST:
-        multiPackets = MULTIPACKETS_SEPARATE;
-        r            = parseRawFormatPlain(msg, &m, showJson);
-        logDebug("plain_or_fast: plain r=%d\n", r);
-        if (r < 0)
+        if (getMessageByteCount(msg) <= 8)
         {
-          multiPackets = MULTIPACKETS_COALESCED;
-          r            = parseRawFormatFast(msg, &m, showJson);
+          r = parseRawFormatPlain(msg, &m, showJson);
+          logDebug("plain_or_fast: plain r=%d\n", r);
+        }
+        else
+        {
+          r = parseRawFormatFast(msg, &m, showJson);
+          if (r >= 0)
+          {
+            format       = RAWFORMAT_FAST;
+            multiPackets = MULTIPACKETS_COALESCED;
+            logDebug("plain_or_fast: fast r=%d\n", r);
+          }
+        }
+        break;
+
+      case RAWFORMAT_PLAIN_MIX_FAST:
+        if (getMessageByteCount(msg) <= 8)
+        {
+          r = parseRawFormatPlain(msg, &m, showJson);
+          logDebug("plain_or_fast: plain r=%d\n", r);
+        }
+        else
+        {
+          r = parseRawFormatFast(msg, &m, showJson);
           logDebug("plain_or_fast: fast r=%d\n", r);
         }
         break;
 
       case RAWFORMAT_PLAIN:
         r = parseRawFormatPlain(msg, &m, showJson);
-        if (r >= 0)
-        {
-          break;
-        }
-        // Else fall through to fast!
+        break;
 
       case RAWFORMAT_FAST:
         r = parseRawFormatFast(msg, &m, showJson);
-        if (r >= 0 && format == RAWFORMAT_PLAIN)
-        {
-          logInfo("Detected normal format with all frames on one line\n");
-          multiPackets = MULTIPACKETS_COALESCED;
-          format       = RAWFORMAT_FAST;
-        }
         break;
 
       case RAWFORMAT_AIRMAR:
@@ -425,10 +457,27 @@ int main(int argc, char **argv)
   return 0;
 }
 
-static enum RawFormats detectFormat(const char *msg)
+static unsigned int getMessageByteCount(const char *const msg)
 {
-  char        *p;
+  const char  *p;
   int          r;
+  unsigned int len;
+
+  p = strchr(msg, ',');
+  if (p)
+  {
+    r = sscanf(p, ",%*u,%*u,%*u,%*u,%u,%*x,%*x,%*x,%*x,%*x,%*x,%*x,%*x,%*x", &len);
+    if (r >= 1)
+    {
+      return len;
+    }
+  }
+  return 0;
+}
+
+static enum RawFormats detectFormat(const char *const msg)
+{
+  const char  *p;
   unsigned int len;
 
   if (msg[0] == '$' && strncmp(msg, "$PCDIN", 6) == 0)
@@ -464,23 +513,17 @@ static enum RawFormats detectFormat(const char *msg)
     return RAWFORMAT_AIRMAR;
   }
 
-  p = strchr(msg, ',');
-  if (p)
+  len = getMessageByteCount(msg);
+  if (len > 0)
   {
-    r = sscanf(p, ",%*u,%*u,%*u,%*u,%u,%*x,%*x,%*x,%*x,%*x,%*x,%*x,%*x,%*x", &len);
-    if (r < 1)
-    {
-      return RAWFORMAT_UNKNOWN;
-    }
     if (len > 8)
     {
-      logInfo("Detected normal format with all frames on one line\n");
+      logInfo("Detected FAST format with all frames on one line\n");
       multiPackets = MULTIPACKETS_COALESCED;
       return RAWFORMAT_FAST;
     }
-    logInfo("Assuming normal format with one line per frame\n");
-    multiPackets = MULTIPACKETS_SEPARATE;
-    return RAWFORMAT_PLAIN;
+    logInfo("Assuming PLAIN_OR_FAST format with one line per frame or one line per message\n");
+    return RAWFORMAT_PLAIN_OR_FAST;
   }
 
   {
@@ -507,12 +550,20 @@ static enum RawFormats detectFormat(const char *msg)
   return RAWFORMAT_UNKNOWN;
 }
 
-static void printCanRaw(RawMessage *msg)
+static void printCanRaw(const RawMessage *msg)
 {
   size_t i;
   FILE  *f = stdout;
 
   if (onlySrc >= 0 && onlySrc != msg->src)
+  {
+    return;
+  }
+  if (onlyDst >= 0 && onlyDst != msg->dst)
+  {
+    return;
+  }
+  if (onlyPgn > 0 && onlyPgn != msg->pgn)
   {
     return;
   }
@@ -524,10 +575,10 @@ static void printCanRaw(RawMessage *msg)
 
   if (showRaw && (!onlyPgn || onlyPgn == msg->pgn))
   {
-    fprintf(f, "%s %u %03u %03u %6u :", msg->timestamp, msg->prio, msg->src, msg->dst, msg->pgn);
+    fprintf(f, "%s,%u,%u,%u,%u,%u", msg->timestamp, msg->prio, msg->pgn, msg->src, msg->dst, msg->len);
     for (i = 0; i < msg->len; i++)
     {
-      fprintf(f, " %02x", msg->data[i]);
+      fprintf(f, ",%02x", msg->data[i]);
     }
     putc('\n', f);
   }
@@ -642,11 +693,15 @@ static void showBuffers(void)
 
 static void printCanFormat(RawMessage *msg)
 {
-  Pgn    *pgn;
-  size_t  buffer;
-  Packet *p;
+  const Pgn *pgn;
+  size_t     buffer;
+  Packet    *p;
 
   if (onlySrc >= 0 && onlySrc != msg->src)
+  {
+    return;
+  }
+  if (onlyDst >= 0 && onlyDst != msg->dst)
   {
     return;
   }
@@ -660,7 +715,7 @@ static void printCanFormat(RawMessage *msg)
   {
     pgn = searchForUnknownPgn(msg->pgn);
   }
-  if (multiPackets == MULTIPACKETS_COALESCED || !pgn || pgn->type != PACKET_FAST)
+  if (multiPackets == MULTIPACKETS_COALESCED || !pgn || pgn->type != PACKET_FAST || msg->len > 8)
   {
     // No reassembly needed
     printPgn(msg, msg->data, msg->len, showData, showJson);
@@ -745,7 +800,7 @@ static void printCanFormat(RawMessage *msg)
   }
 }
 
-static void showBytesOrBits(uint8_t *data, size_t startBit, size_t bits)
+static void showBytesOrBits(const uint8_t *data, size_t startBit, size_t bits)
 {
   int64_t     value;
   int64_t     maxValue;
@@ -825,9 +880,36 @@ static void showBytesOrBits(uint8_t *data, size_t startBit, size_t bits)
   }
 }
 
-static uint32_t refPgn = 0; // Remember this over the entire set of fields
+static uint32_t g_refPgn = 0; // Remember this over the entire set of fields
 
-static bool printField(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits)
+static void fillGlobalsBasedOnFieldName(const char *fieldName, const uint8_t *data, size_t dataLen, size_t startBit, size_t bits)
+{
+  int64_t value;
+  int64_t maxValue;
+
+  if (strcmp(fieldName, "PGN") == 0)
+  {
+    extractNumber(NULL, data, dataLen, startBit, bits, &value, &maxValue);
+    logDebug("Reference PGN = %" PRId64 "\n", value);
+    g_refPgn = value;
+    return;
+  }
+
+  if (strcmp(fieldName, "Length") == 0)
+  {
+    extractNumber(NULL, data, dataLen, startBit, bits, &value, &maxValue);
+    logDebug("for next field: length = %" PRId64 "\n", value);
+    g_length = value;
+    return;
+  }
+}
+
+static bool printField(const Field   *field,
+                       const char    *fieldName,
+                       const uint8_t *data,
+                       size_t         dataLen,
+                       size_t         startBit,
+                       size_t        *bits)
 {
   size_t bytes;
   double resolution;
@@ -865,11 +947,7 @@ static bool printField(Field *field, char *fieldName, uint8_t *data, size_t data
     *bits = 0;
   }
 
-  if (strcmp(fieldName, "PGN") == 0)
-  {
-    size_t off = startBit / 8;
-    refPgn     = data[off] + (data[off + 1] << 8) + (data[off + 2] << 16);
-  }
+  fillGlobalsBasedOnFieldName(field->name, data, dataLen, startBit, *bits);
 
   logDebug("PGN %u: printField <%s>, \"%s\": bits=%zu proprietary=%u refPgn=%u\n",
            field->pgn->pgn,
@@ -877,11 +955,12 @@ static bool printField(Field *field, char *fieldName, uint8_t *data, size_t data
            fieldName,
            *bits,
            field->proprietary,
-           refPgn);
+           g_refPgn);
 
   if (field->proprietary)
   {
-    if ((refPgn >= 65280 && refPgn <= 65535) || (refPgn >= 126720 && refPgn <= 126975) || (refPgn >= 130816 && refPgn <= 131071))
+    if ((g_refPgn >= 65280 && g_refPgn <= 65535) || (g_refPgn >= 126720 && g_refPgn <= 126975)
+        || (g_refPgn >= 130816 && g_refPgn <= 131071))
     {
       // proprietary, allow field
     }
@@ -967,9 +1046,9 @@ static bool printField(Field *field, char *fieldName, uint8_t *data, size_t data
   return false;
 }
 
-bool printPgn(RawMessage *msg, uint8_t *data, int length, bool showData, bool showJson)
+bool printPgn(const RawMessage *msg, const uint8_t *data, int length, bool showData, bool showJson)
 {
-  Pgn *pgn;
+  const Pgn *pgn;
 
   size_t  i;
   size_t  bits;
@@ -1027,6 +1106,15 @@ bool printPgn(RawMessage *msg, uint8_t *data, int length, bool showData, bool sh
             msg->dst,
             msg->pgn,
             pgn->description);
+    if (showAllBytes)
+    {
+      mprintf(",\"data\":\"");
+      for (i = 0; i < length; i++)
+      {
+        mprintf("%2.02X", data[i]);
+      }
+      mprintf("\"");
+    }
     strcpy(closingBraces, "}");
     sep = ",\"fields\":{";
   }
@@ -1045,7 +1133,7 @@ bool printPgn(RawMessage *msg, uint8_t *data, int length, bool showData, bool sh
   r                        = true;
   for (i = 0, startBit = 0; (startBit >> 3) < length; i++)
   {
-    Field *field = &pgn->fieldList[i];
+    const Field *field = &pgn->fieldList[i];
 
     if (variableFields == 0)
     {
@@ -1159,21 +1247,26 @@ bool printPgn(RawMessage *msg, uint8_t *data, int length, bool showData, bool sh
   return r;
 }
 
-extern bool fieldPrintVariable(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits)
+extern bool fieldPrintVariable(const Field   *field,
+                               const char    *fieldName,
+                               const uint8_t *data,
+                               size_t         dataLen,
+                               size_t         startBit,
+                               size_t        *bits)
 {
-  Field *refField;
-  bool   r;
+  const Field *refField;
+  bool         r;
 
-  refField = getField(refPgn, data[startBit / 8 - 1] - 1);
+  refField = getField(g_refPgn, data[startBit / 8 - 1] - 1);
   if (refField)
   {
-    logDebug("Field %s: found variable field %u '%s'\n", fieldName, refPgn, refField->name);
+    logDebug("Field %s: found variable field %u '%s'\n", fieldName, g_refPgn, refField->name);
     r     = printField(refField, fieldName, data, dataLen, startBit, bits);
     *bits = (*bits + 7) & ~0x07; // round to bytes
     return r;
   }
 
-  logError("Field %s: cannot derive variable length for PGN %d field # %d\n", fieldName, refPgn, data[-1]);
+  logError("Field %s: cannot derive variable length for PGN %d field # %d\n", fieldName, g_refPgn, data[-1]);
   *bits = 8; /* Gotta assume something */
   return false;
 }

@@ -27,24 +27,116 @@ limitations under the License.
 
 #include "common.h"
 
-typedef bool (*FieldPrintFunctionType)(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
+typedef bool (*FieldPrintFunctionType)(const Field   *field,
+                                       const char    *fieldName,
+                                       const uint8_t *data,
+                                       size_t         dataLen,
+                                       size_t         startBit,
+                                       size_t        *bits);
 
-extern bool fieldPrintBinary(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintBitLookup(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintDate(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintDecimal(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintFloat(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintLatLon(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintLookup(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintMMSI(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintNumber(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintReserved(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintSpare(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintStringFix(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintStringLAU(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintStringLZ(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintTime(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
-extern bool fieldPrintVariable(Field *field, char *fieldName, uint8_t *data, size_t dataLen, size_t startBit, size_t *bits);
+extern bool fieldPrintBinary(const Field   *field,
+                             const char    *fieldName,
+                             const uint8_t *data,
+                             size_t         dataLen,
+                             size_t         startBit,
+                             size_t        *bits);
+extern bool fieldPrintBitLookup(const Field   *field,
+                                const char    *fieldName,
+                                const uint8_t *data,
+                                size_t         dataLen,
+                                size_t         startBit,
+                                size_t        *bits);
+extern bool fieldPrintDate(const Field   *field,
+                           const char    *fieldName,
+                           const uint8_t *data,
+                           size_t         dataLen,
+                           size_t         startBit,
+                           size_t        *bits);
+extern bool fieldPrintDecimal(const Field   *field,
+                              const char    *fieldName,
+                              const uint8_t *data,
+                              size_t         dataLen,
+                              size_t         startBit,
+                              size_t        *bits);
+extern bool fieldPrintFloat(const Field   *field,
+                            const char    *fieldName,
+                            const uint8_t *data,
+                            size_t         dataLen,
+                            size_t         startBit,
+                            size_t        *bits);
+extern bool fieldPrintLatLon(const Field   *field,
+                             const char    *fieldName,
+                             const uint8_t *data,
+                             size_t         dataLen,
+                             size_t         startBit,
+                             size_t        *bits);
+extern bool fieldPrintLookup(const Field   *field,
+                             const char    *fieldName,
+                             const uint8_t *data,
+                             size_t         dataLen,
+                             size_t         startBit,
+                             size_t        *bits);
+extern bool fieldPrintMMSI(const Field   *field,
+                           const char    *fieldName,
+                           const uint8_t *data,
+                           size_t         dataLen,
+                           size_t         startBit,
+                           size_t        *bits);
+extern bool fieldPrintNumber(const Field   *field,
+                             const char    *fieldName,
+                             const uint8_t *data,
+                             size_t         dataLen,
+                             size_t         startBit,
+                             size_t        *bits);
+extern bool fieldPrintReserved(const Field   *field,
+                               const char    *fieldName,
+                               const uint8_t *data,
+                               size_t         dataLen,
+                               size_t         startBit,
+                               size_t        *bits);
+extern bool fieldPrintSpare(const Field   *field,
+                            const char    *fieldName,
+                            const uint8_t *data,
+                            size_t         dataLen,
+                            size_t         startBit,
+                            size_t        *bits);
+extern bool fieldPrintStringFix(const Field   *field,
+                                const char    *fieldName,
+                                const uint8_t *data,
+                                size_t         dataLen,
+                                size_t         startBit,
+                                size_t        *bits);
+extern bool fieldPrintStringLAU(const Field   *field,
+                                const char    *fieldName,
+                                const uint8_t *data,
+                                size_t         dataLen,
+                                size_t         startBit,
+                                size_t        *bits);
+extern bool fieldPrintStringLZ(const Field   *field,
+                               const char    *fieldName,
+                               const uint8_t *data,
+                               size_t         dataLen,
+                               size_t         startBit,
+                               size_t        *bits);
+extern bool fieldPrintTime(const Field   *field,
+                           const char    *fieldName,
+                           const uint8_t *data,
+                           size_t         dataLen,
+                           size_t         startBit,
+                           size_t        *bits);
+extern bool fieldPrintVariable(const Field   *field,
+                               const char    *fieldName,
+                               const uint8_t *data,
+                               size_t         dataLen,
+                               size_t         startBit,
+                               size_t        *bits);
+extern bool fieldPrintKeyValue(const Field   *field,
+                               const char    *fieldName,
+                               const uint8_t *data,
+                               size_t         dataLen,
+                               size_t         startBit,
+                               size_t        *bits);
+extern void fixupUnit(Field *f);
 
 typedef enum Bool
 {
@@ -331,8 +423,9 @@ FieldType fieldTypeList[] = {
        "encodings. The maximum positive value means that the field is not present. The maximum positive value minus 1 means that "
        "the field has an error. For instance, a broken sensor. For signed numbers the maximum values are the maximum positive "
        "value and that minus 1, not the all-ones bit encoding which is the maximum negative value.",
-     .url = "https://en.wikipedia.org/wiki/Binary_number",
-     .pf  = fieldPrintNumber},
+     .url    = "https://en.wikipedia.org/wiki/Binary_number",
+     .v1Type = "Number",
+     .pf     = fieldPrintNumber},
 
     {.name          = "INTEGER",
      .description   = "Signed integral number",
@@ -462,7 +555,15 @@ FieldType fieldTypeList[] = {
      .comment = "For almost all lookups the list of values is known with some precision, but it is quite possible that a value "
                 "occurs that has no corresponding textual explanation.",
      .pf      = fieldPrintBitLookup,
-    .v1Type   = "Bitfield"},
+     .v1Type  = "Bitfield"},
+
+    {.name        = "FIELDTYPE_LOOKUP",
+     .description = "Number value where each value encodes for a distinct meaning including a fieldtype of the next variable field",
+     .encodingDescription = "Each lookup has a LookupFieldTypeEnumeration defining what the possible values mean",
+     .comment = "These values have been determined by reverse engineering, given the known values it is anticipated that there are "
+                "unkown enumeration values and some known values have incorrect datatypes",
+     .hasSign = False,
+     .pf      = fieldPrintLookup},
 
     {.name          = "MANUFACTURER",
      .description   = "Manufacturer",
@@ -476,6 +577,20 @@ FieldType fieldTypeList[] = {
     {.name = "VERSION", .description = "Version", .resolution = 0.001, .baseFieldType = "UFIX16"},
 
     // Specific typed numeric fields
+
+    {.name = "FIX16_1", .description = "Fixed point signed with 1 digit resolution", .resolution = 0.1, .baseFieldType = "FIX16"},
+
+    {.name = "FIX32_2", .description = "Fixed point signed with 2 digits resolution", .resolution = 0.01, .baseFieldType = "FIX32"},
+
+    {.name          = "UFIX32_2",
+     .description   = "Fixed point unsigned with 2 digits resolution",
+     .resolution    = 0.001,
+     .baseFieldType = "UFIX32"},
+
+    {.name          = "UFIX16_3",
+     .description   = "Fixed point unsigned with 3 digits resolution",
+     .resolution    = 0.001,
+     .baseFieldType = "UFIX16"},
 
     {.name          = "DILUTION_OF_PRECISION_FIX16",
      .description   = "Dilution of precision",
@@ -612,6 +727,14 @@ FieldType fieldTypeList[] = {
      .resolution    = 0.01,
      .physical      = &TEMPERATURE,
      .baseFieldType = "UFIX16",
+     .v1Type        = "Temperature"},
+
+    {.name          = "TEMPERATURE_UINT8_OFFSET", /* used by PGN 65262 & 65270 */
+     .description   = "Temperature",
+     .offset        = 233, /* offset to degrees Kelvin */
+     .resolution    = 1,
+     .physical      = &TEMPERATURE,
+     .baseFieldType = "UINT8",
      .v1Type        = "Temperature"},
 
     {.name                = "TEMPERATURE_HIGH",
@@ -763,6 +886,12 @@ FieldType fieldTypeList[] = {
      .physical      = &POTENTIAL_DIFFERENCE,
      .baseFieldType = "UFIX16"},
 
+    {.name          = "VOLTAGE_UFIX16_50MV",
+     .description   = "Voltage",
+     .resolution    = 0.05,
+     .physical      = &POTENTIAL_DIFFERENCE,
+     .baseFieldType = "UFIX16"},
+
     {.name          = "VOLTAGE_UFIX16_100MV",
      .description   = "Voltage",
      .resolution    = 0.1,
@@ -882,6 +1011,12 @@ FieldType fieldTypeList[] = {
      .physical      = &ELECTRICAL_REACTIVE_POWER,
      .baseFieldType = "FIX32"},
 
+    {.name          = "POWER_UINT8",
+     .description   = "Electrical power, either DC or AC Real power, in Watts",
+     .physical      = &ELECTRICAL_POWER,
+     .resolution    = 1,
+     .baseFieldType = "UINT8"},
+
     {.name          = "POWER_UINT16",
      .description   = "Electrical power, either DC or AC Real power, in Watts",
      .physical      = &ELECTRICAL_POWER,
@@ -923,13 +1058,22 @@ FieldType fieldTypeList[] = {
 
     {.name = "PERCENTAGE_UINT8", .description = "Percentage, unsigned", .unit = "%", .baseFieldType = "UINT8"},
 
+    {.name = "PERCENTAGE_UINT8_HIGHRES", .description = "Percentage, unsigned", .unit = "%", .baseFieldType = "UINT8"},
+
     {.name = "PERCENTAGE_INT8", .description = "Percentage", .unit = "%", .baseFieldType = "INT8"},
 
-    {.name          = "PERCENTAGE_UFIX16",
-     .description   = "Percentage, unsigned high range",
-     .resolution    = 0.004,
+    {.name          = "PERCENTAGE_FIX16",
+     .description   = "Percentage, high precision",
      .unit          = "%",
-     .baseFieldType = "UFIX16"},
+     .resolution    = RES_PERCENTAGE,
+     .baseFieldType = "FIX16"},
+
+    {.name                = "PERCENTAGE_FIX16_D",
+     .description         = "Percentage, promille range",
+     .encodingDescription = "Percentage in promille (1/10 %)",
+     .resolution          = 0.1,
+     .unit                = "%",
+     .baseFieldType       = "FIX16"},
 
     {.name                = "ROTATION_FIX16",
      .description         = "Rotational speed",
@@ -955,11 +1099,31 @@ FieldType fieldTypeList[] = {
      .physical            = &ANGULAR_VELOCITY,
      .baseFieldType       = "UFIX16"},
 
+    {.name                = "ROTATION_UFIX16_RPM_HIGHRES",
+     .description         = "Rotational speed, RPM",
+     .encodingDescription = "Angular rotation in 0.125 rpm",
+     .resolution          = 0.125,
+     .unit                = "rpm",
+     .physical            = &ANGULAR_VELOCITY,
+     .baseFieldType       = "UFIX16"},
+
     {.name          = "PRESSURE_UFIX16_HPA",
      .description   = "Pressure, 16 bit unsigned in hectopascal resolution",
      .resolution    = 100,
      .physical      = &PRESSURE,
      .baseFieldType = "UFIX16"},
+
+    {.name          = "PRESSURE_UINT8_2KPA",
+     .description   = "Pressure, 8 bit unsigned in 2 kilopascal resolution",
+     .resolution    = 2000,
+     .physical      = &PRESSURE,
+     .baseFieldType = "UINT8"},
+
+    {.name          = "PRESSURE_UINT8_KPA",
+     .description   = "Pressure, 8 bit unsigned in .5 kilopascal resolution",
+     .resolution    = 500,
+     .physical      = &PRESSURE,
+     .baseFieldType = "UINT8"},
 
     {.name          = "PRESSURE_UFIX16_KPA",
      .description   = "Pressure, 16 bit unsigned in kilopascal resolution.",
@@ -1169,16 +1333,34 @@ FieldType fieldTypeList[] = {
      .description = "Variable",
      .encodingDescription
      = "The definition of the field is that of the reference PGN and reference field, this is totally variable.",
-     .pf = fieldPrintVariable}};
+     .pf = fieldPrintVariable},
+
+    {.name        = "KEY_VALUE",
+     .description = "Key/value",
+     .encodingDescription
+     = "The type definition of the field is defined by an earlier LookupFieldTypeEnumeration field. The length is defined by "
+       "the preceding length field.",
+     .pf = fieldPrintKeyValue},
+
+    {.name                = "FIELD_INDEX",
+     .description         = "Field Index",
+     .resolution          = 1,
+     .size                = 8,
+     .hasSign             = False,
+     .rangeMin            = 1, // Minimum field index (.Order)
+     .rangeMax            = 253,
+     .encodingDescription = "Index of the specified field in the PGN referenced.",
+     .pf                  = fieldPrintNumber}};
 
 const size_t fieldTypeCount = ARRAY_SIZE(fieldTypeList);
 
 #else
-extern FieldType                     fieldTypeList[];
-extern const size_t                  fieldTypeCount;
+extern FieldType    fieldTypeList[];
+extern const size_t fieldTypeCount;
 #endif // FIELDTYPE_GLOBALS
 
 extern FieldType *getFieldType(const char *name);
 extern void       fillFieldType(bool doUnitFixup);
+extern void       fillFieldTypeLookupField(Field *f, const char *lookup, const size_t key, const char *str, const char *ft);
 
 #endif // FIELD_H_INCLUDED

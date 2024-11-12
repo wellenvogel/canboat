@@ -114,7 +114,7 @@ static double getMaxRange(const char *name, uint32_t size, double resolution, bo
   return r;
 }
 
-static void fixupUnit(Field *f)
+void fixupUnit(Field *f)
 {
   if (showSI)
   {
@@ -183,6 +183,13 @@ static void fixupUnit(Field *f)
   }
 }
 
+#ifndef EXPLAIN
+static LookupInfo fieldtypeEnums[] = {
+#define LOOKUP_TYPE_FIELDTYPE(type, length) {.name = xstr(type), .size = length, .function.pair = lookup##type},
+#include "lookup.h"
+};
+#endif
+
 extern void fillFieldType(bool doUnitFixup)
 {
   // Percolate fields from physical quantity to fieldtype
@@ -199,6 +206,7 @@ extern void fillFieldType(bool doUnitFixup)
       if (ft->unit == NULL)
       {
         ft->unit = ft->physical->abbreviation;
+        logDebug("Fieldtype '%s' inherits unit '%s' from physical type '%s'\n", ft->name, STRNULL(ft->unit), ft->physical->name);
       }
       if (ft->url == NULL)
       {
@@ -237,13 +245,20 @@ extern void fillFieldType(bool doUnitFixup)
       {
         ft->hasSign = base->hasSign;
       }
+      if (ft->unit == NULL && base->unit != NULL)
+      {
+        ft->unit = base->unit;
+        logDebug("Fieldtype '%s' inherits unit '%s' from base type '%s'\n", ft->name, ft->unit, base->name);
+      }
       if (ft->size == 0 && base->size != 0)
       {
         ft->size = base->size;
+        logDebug("Fieldtype '%s' inherits size %u from base type '%s'\n", ft->name, ft->size, base->name);
       }
       if (ft->resolution == 0.0 && base->resolution != 0.0)
       {
         ft->resolution = base->resolution;
+        logDebug("Fieldtype '%s' inherits resolution %g from base type '%s'\n", ft->name, ft->resolution, base->name);
       }
       else if (ft->resolution != 0.0 && base->resolution != 0.0 && ft->resolution != base->resolution)
       {
@@ -369,6 +384,8 @@ extern void fillFieldType(bool doUnitFixup)
         pgnList[i].hasMatchFields = true;
       }
 
+      logDebug("%s size=%u res=%g sign=%u rangeMax=%g\n", f->name, f->size, f->resolution, ft->hasSign, f->rangeMax);
+
       if (f->size != 0 && f->resolution != 0.0 && ft->hasSign != Null && isnan(f->rangeMax))
       {
         f->rangeMin = getMinRange(f->name, f->size, f->resolution, f->hasSign, f->offset);
@@ -406,8 +423,49 @@ extern void fillFieldType(bool doUnitFixup)
       exit(2);
     }
     pgnList[i].fieldCount = j;
-    logDebug("PGN %u has %u fields\n", pgnList[i].pgn, j);
+    logDebug("PGN %u '%s' has %u fields\n", pgnList[i].pgn, pname, j);
   }
 
+#ifndef EXPLAIN
+  for (size_t i = 0; i < ARRAY_SIZE(fieldtypeEnums); i++)
+  {
+    uint32_t maxValue = (1 << fieldtypeEnums[i].size) - 1;
+
+    for (size_t j = 0; j < maxValue; j++)
+    {
+      /* DISCARD */ (fieldtypeEnums[i].function.pair)(j); // Initialize all internal fields on init
+    }
+  }
+#endif
+
   logDebug("Filled all fieldtypes\n");
+}
+
+extern void fillFieldTypeLookupField(Field *f, const char *lookup, const size_t key, const char *str, const char *ft)
+{
+  f->ft = getFieldType(ft);
+  if (f->ft == NULL)
+  {
+    logAbort("LookupFieldType %s(%d) contains an invalid fieldtype '%s'\n", lookup, key, ft);
+  }
+  f->unit       = f->ft->unit;
+  f->resolution = f->ft->resolution;
+  f->hasSign    = f->ft->hasSign == True;
+  if (f->size == 0)
+  {
+    f->size = f->ft->size;
+  }
+  f->name = str;
+  if (f->unit != NULL)
+  {
+    fixupUnit(f);
+  }
+
+  logDebug("fillFieldTypeLookupField(Field, lookup='%s', key=%zu, str='%s', ft='%s' unit='%s' bits=%u\n",
+           lookup,
+           key,
+           str,
+           ft,
+           STRNULL(f->unit),
+           f->size);
 }
